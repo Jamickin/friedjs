@@ -1,4 +1,11 @@
 import { mount, state, action, ui, uid, onRender, css, cssVar } from "./fried.js";
+import { createDatabase } from "./fried-db.js";
+
+// -- Initialize Local Database --
+const db = createDatabase("FriedAppDB", ["users"]);
+if (typeof window !== "undefined") {
+  db.init().then(() => console.log("💾 POES fast local DB initialized"));
+}
 
 // -- App-level styles defined in JS, injected once as a <style> tag via css()
 // These live alongside component logic — no separate CSS file needed for component styles.
@@ -639,6 +646,15 @@ function renderHeader() {
       ui(
         "button",
         {
+          key: "tab-db-btn",
+          class: activeTab.value === "database" ? "btn btn-primary" : "btn",
+          onclick: () => setTab("database"),
+        },
+        ["💾 Local Database"]
+      ),
+      ui(
+        "button",
+        {
           key: "toggle-keys-btn",
           class: inspectKeysActive.value ? "btn btn-danger" : "btn",
           onclick: toggleInspectKeys,
@@ -1157,6 +1173,71 @@ function renderTestSuiteCard() {
   ]);
 }
 
+function generateDbUsers(count) {
+  const users = [];
+  const roles = ["Admin", "Editor", "Viewer"];
+  for(let i=0; i<count; i++) {
+    users.push({
+      name: `User ${Math.floor(Math.random() * 100000)}`,
+      role: roles[Math.floor(Math.random() * roles.length)],
+      age: Math.floor(Math.random() * 50) + 18
+    });
+  }
+  db.collections.users.bulkInsert(users);
+}
+
+function renderDatabaseCard() {
+  const users = db.collections.users.value || [];
+  
+  return ui("div", { key: "db-card", class: "card" }, [
+    ui("div", { key: "db-header", class: "card-header" }, [
+      ui("span", { key: "db-title", class: "card-title" }, ["💾 POES Fast Local Database"]),
+      ui("span", { key: "db-badge", class: "badge badge-blue" }, [`${users.length} Records`]),
+    ]),
+    ui("p", { key: "db-desc", style: "color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1.25rem;" }, [
+      "This demonstrates ",
+      ui("strong", {}, ["fried-db.js"]),
+      " — an in-memory reactive database backed asynchronously by IndexedDB. Reads are O(1) synchronous, triggering instant UI renders, while writes are flushed to disk in a non-blocking background thread."
+    ]),
+    
+    ui("div", { key: "db-actions", class: "button-row", style: "margin-bottom: 1rem;" }, [
+      ui("button", { key: "btn-db-add-1", class: "btn btn-primary", onclick: () => generateDbUsers(1) }, ["+ Add 1 User"]),
+      ui("button", { key: "btn-db-add-1k", class: "btn btn-primary", onclick: () => generateDbUsers(1000) }, ["+ Bulk Insert 1,000"]),
+      ui("button", { key: "btn-db-add-10k", class: "btn btn-primary", onclick: () => generateDbUsers(10000) }, ["+ Bulk Insert 10,000"]),
+      ui("button", { key: "btn-db-clear", class: "btn btn-danger", onclick: () => db.collections.users.clear() }, ["🗑 Clear DB"]),
+    ]),
+
+    ui("div", { key: "db-table-wrap", style: "max-height: 400px; overflow-y: auto; border: 1px solid var(--border); border-radius: 4px;" }, [
+      users.length === 0 
+        ? ui("div", { style: "padding: 2rem; text-align: center; color: var(--text-muted);" }, ["Database is empty."])
+        : ui("table", { style: "width: 100%; border-collapse: collapse; text-align: left; font-size: 0.85rem;" }, [
+            ui("thead", { style: "background: var(--surface); position: sticky; top: 0;" }, [
+              ui("tr", {}, [
+                ui("th", { style: "padding: 8px; border-bottom: 1px solid var(--border);" }, ["ID"]),
+                ui("th", { style: "padding: 8px; border-bottom: 1px solid var(--border);" }, ["Name"]),
+                ui("th", { style: "padding: 8px; border-bottom: 1px solid var(--border);" }, ["Role"]),
+                ui("th", { style: "padding: 8px; border-bottom: 1px solid var(--border);" }, ["Age"]),
+                ui("th", { style: "padding: 8px; border-bottom: 1px solid var(--border);" }, ["Action"]),
+              ])
+            ]),
+            ui("tbody", {}, 
+              // Only render first 100 to DOM to avoid browser table layout stalling on 10k items
+              users.slice(0, 100).map(u => ui("tr", { key: `user-${u.id}` }, [
+                ui("td", { style: "padding: 8px; border-bottom: 1px solid var(--border); font-family: var(--font-mono); color: var(--text-muted);" }, [String(u.id).slice(0,6)]),
+                ui("td", { style: "padding: 8px; border-bottom: 1px solid var(--border);" }, [u.name]),
+                ui("td", { style: "padding: 8px; border-bottom: 1px solid var(--border);" }, [u.role]),
+                ui("td", { style: "padding: 8px; border-bottom: 1px solid var(--border);" }, [u.age]),
+                ui("td", { style: "padding: 8px; border-bottom: 1px solid var(--border);" }, [
+                  ui("button", { class: "btn btn-sm btn-danger", onclick: () => db.collections.users.remove(u.id) }, ["Delete"])
+                ])
+              ]))
+            )
+          ]),
+      users.length > 100 ? ui("div", { style: "padding: 10px; text-align: center; font-size: 0.8rem; color: var(--text-muted);" }, [`...and ${users.length - 100} more records (UI truncated to first 100 for speed)`]) : null
+    ])
+  ]);
+}
+
 function renderApp() {
   totalRenderCycles++;
 
@@ -1171,8 +1252,10 @@ function renderApp() {
     ]);
   } else if (activeTab.value === "benchmark") {
     mainContent = ui("div", { key: "bench-view" }, [renderBenchmarkCard()]);
-  } else {
+  } else if (activeTab.value === "tests") {
     mainContent = ui("div", { key: "tests-view" }, [renderTestSuiteCard()]);
+  } else if (activeTab.value === "database") {
+    mainContent = ui("div", { key: "db-view" }, [renderDatabaseCard()]);
   }
 
   return ui("div", { key: "main-app-container", class: "container" }, [
