@@ -2,21 +2,28 @@
 // an AI agent. There is no new syntax here: this is real, ordinary
 // JavaScript, loaded as an ES module with no build step.
 //
-// Hydration & In-Place Reconciliation (Vue/Svelte-inspired):
-// Instead of destructive full re-renders (root.innerHTML = ""), this uses
-// lightweight in-place DOM hydration. It preserves existing DOM nodes,
-// synchronizes attributes/text, and uses `data-fried-key` for keyed
-// child reconciliation. State changes are batched into microtasks to prevent
-// layout thrashing and lag spikes, all while keeping the runtime tiny (~130 lines).
+// Hydration & Fast-Path In-Place Reconciliation (Vue/Svelte-inspired):
+// Uses fast-path 1-to-1 diffing and pure-JS prop tracking to avoid
+// slow DOM reflection overhead. Retains existing DOM nodes, batches
+// renders via microtasks, and stays tiny (<150 lines).
 
 let root = null;
 let renderFn = null;
 let pendingRender = false;
+let renderHooks = [];
 
 export function mount(rootRenderFn, el) {
   renderFn = rootRenderFn;
   root = el;
   render();
+}
+
+/** Registers a callback hook invoked after every render cycle with timing metrics */
+export function onRender(fn) {
+  renderHooks.push(fn);
+  return () => {
+    renderHooks = renderHooks.filter((h) => h !== fn);
+  };
 }
 
 /** Schedules a microtask render to batch synchronous state mutations (Vue-style) */
@@ -27,16 +34,6 @@ function scheduleRender() {
     pendingRender = false;
     render();
   });
-}
-
-let renderHooks = [];
-
-/** Registers a callback hook invoked after every render cycle with timing metrics */
-export function onRender(fn) {
-  renderHooks.push(fn);
-  return () => {
-    renderHooks = renderHooks.filter((h) => h !== fn);
-  };
 }
 
 /** Synchronous flush / render */
@@ -88,63 +85,93 @@ function hydrate(oldNode, newNode) {
     return newNode;
   }
 
-  // 3. Hydrate attributes, properties & event handlers
+  // 3. Fast-path attribute & property reconciliation via cached JS props
   hydrateAttributes(oldNode, newNode);
 
-  // 4. Hydrate child nodes (keyed via data-fried-key)
+  // 4. Hydrate child nodes
   hydrateChildren(oldNode, newNode);
 
   return oldNode;
 }
 
 function hydrateAttributes(oldEl, newEl) {
-  // Remove attributes no longer present
-  for (const attr of Array.from(oldEl.attributes || [])) {
-    if (!newEl.hasAttribute(attr.name)) {
-      oldEl.removeAttribute(attr.name);
+  const oldProps = oldEl._friedProps || {};
+  const newProps = newEl._friedProps || {};
+
+  // Remove deleted attributes / properties
+  for (const k in oldProps) {
+    if (!(k in newProps)) {
+      if (k === "class") oldEl.className = "";
+      else if (k === "checked") oldEl.checked = false;
+      else if (!k.startsWith("on") && k !== "key") oldEl.removeAttribute(k);
     }
   }
 
-  // Set new or changed attributes
-  for (const attr of Array.from(newEl.attributes || [])) {
-    if (oldEl.getAttribute(attr.name) !== attr.value) {
-      oldEl.setAttribute(attr.name, attr.value);
-    }
-  }
+  // Set updated or added attributes / properties
+  for (const k in newProps) {
+    const nextVal = newProps[k];
+    if (oldProps[k] === nextVal) continue;
 
-  // Synchronize dynamic properties
-  if (oldEl.className !== newEl.className) {
-    oldEl.className = newEl.className;
-  }
-  if ("checked" in newEl && oldEl.checked !== newEl.checked) {
-    oldEl.checked = newEl.checked;
-  }
-  if ("value" in newEl && oldEl.value !== newEl.value && oldEl !== (typeof document !== "undefined" && document.activeElement)) {
-    oldEl.value = newEl.value;
+    if (k === "class") {
+      oldEl.className = nextVal;
+    } else if (k === "checked") {
+      oldEl.checked = !!nextVal;
+    } else if (k === "value") {
+      if (oldEl !== (typeof document !== "undefined" && document.activeElement)) {
+        oldEl.value = nextVal;
+      }
+    } else if (k.startsWith("on")) {
+      // Event handler closure updated below
+    } else if (k !== "key" && nextVal !== false && nextVal != null) {
+      oldEl.setAttribute(k, nextVal);
+    }
   }
 
   // Forward event handlers to latest closure
   if (newEl._friedHandlers) {
-    oldEl._friedHandlers = oldEl._friedHandlers || {};
-    Object.assign(oldEl._friedHandlers, newEl._friedHandlers);
+    oldEl._friedHandlers = Object.assign(oldEl._friedHandlers || {}, newEl._friedHandlers);
   }
+  oldEl._friedProps = newProps;
 }
 
 function hydrateChildren(oldParent, newParent) {
-  const oldCh = Array.from(oldParent.childNodes);
-  const newCh = Array.from(newParent.childNodes);
+  const oldNodes = oldParent.childNodes;
+  const newNodes = newParent.childNodes;
+  const oldLen = oldNodes.length;
+  const newLen = newNodes.length;
 
-  // Build index of existing keyed children
-  const keyMap = new Map();
-  for (let i = 0; i < oldCh.length; i++) {
-    const key = oldCh[i].dataset?.friedKey;
-    if (key) keyMap.set(key, oldCh[i]);
+  // Fast-Path: Check if children are in the exact same sequence (covers 99% of re-renders)
+  const commonLen = Math.min(oldLen, newLen);
+  let isIdenticalSequence = true;
+
+  for (let i = 0; i < commonLen; i++) {
+    const o = oldNodes[i];
+    const n = newNodes[i];
+    if (o._friedKey !== n._friedKey || o.nodeType !== n.nodeType || o.tagName !== n.tagName) {
+      isIdenticalSequence = false;
+      break;
+    }
   }
 
-  for (let i = 0; i < newCh.length; i++) {
-    const newChild = newCh[i];
-    const key = newChild.dataset?.friedKey;
-    const oldChild = key ? keyMap.get(key) : oldCh[i];
+  if (isIdenticalSequence && oldLen === newLen) {
+    // ⚡ Fast path: In-place 1-to-1 diff without Map allocation or insertBefore
+    for (let i = 0; i < oldLen; i++) {
+      hydrate(oldNodes[i], newNodes[i]);
+    }
+    return;
+  }
+
+  // Fallback: Keyed Map reconciliation for insertions, deletions, and reordering
+  const keyMap = new Map();
+  for (let i = 0; i < oldLen; i++) {
+    const key = oldNodes[i]._friedKey;
+    if (key) keyMap.set(key, oldNodes[i]);
+  }
+
+  for (let i = 0; i < newLen; i++) {
+    const newChild = newNodes[i];
+    const key = newChild._friedKey;
+    const oldChild = key ? keyMap.get(key) : oldNodes[i];
 
     if (oldChild && oldChild.parentNode === oldParent) {
       if (key) keyMap.delete(key);
@@ -160,7 +187,7 @@ function hydrateChildren(oldParent, newParent) {
   }
 
   // Remove excess old children
-  while (oldParent.childNodes.length > newCh.length) {
+  while (oldParent.childNodes.length > newLen) {
     oldParent.removeChild(oldParent.lastChild);
   }
 }
@@ -180,11 +207,7 @@ export function state(initial) {
   };
 }
 
-/**
- * Wraps a function as a named action: after it runs, the app re-renders.
- * The name is never used at runtime -- it exists so a later AST patch can
- * find `action("toggle", ...)` by searching for that string literal.
- */
+/** Wraps a function as a named action */
 export function action(name, fn) {
   const wrapped = (...args) => {
     const result = fn(...args);
@@ -201,6 +224,9 @@ export function action(name, fn) {
  */
 export function ui(tag, props = {}, children = []) {
   const el = document.createElement(tag);
+  el._friedProps = props;
+  el._friedKey = props.key;
+
   for (const [k, v] of Object.entries(props)) {
     if (k === "key") {
       el.dataset.friedKey = v;
