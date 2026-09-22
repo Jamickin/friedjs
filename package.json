@@ -5,11 +5,16 @@
   "scripts": {
     "start": "node server.js",
     "test": "node test.js",
-    "bench": "node benchmark.js"
+    "bench": "node benchmark.js",
+    "build": "node build.js",
+    "serve:prod": "node server-prod.js"
   },
   "dependencies": {
     "acorn": "^8.11.0",
     "acorn-walk": "^8.3.5",
     "magic-string": "^0.30.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   }
 }
