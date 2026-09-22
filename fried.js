@@ -113,7 +113,7 @@ function hydrateAttributes(oldEl, newEl) {
     if (oldProps[k] === nextVal) continue;
 
     if (k === "class") {
-      oldEl.className = nextVal;
+      oldEl.className = nextVal || "";
     } else if (k === "checked") {
       oldEl.checked = !!nextVal;
     } else if (k === "value") {
@@ -122,7 +122,12 @@ function hydrateAttributes(oldEl, newEl) {
       }
     } else if (k.startsWith("on")) {
       // Event handler closure updated below
-    } else if (k !== "key" && nextVal !== false && nextVal != null) {
+    } else if (k === "key") {
+      // Never set key as a DOM attribute
+    } else if (nextVal === false || nextVal == null) {
+      // Boolean prop became false/null → remove the attribute (fixes disabled, hidden, etc.)
+      oldEl.removeAttribute(k);
+    } else {
       oldEl.setAttribute(k, nextVal);
     }
   }
