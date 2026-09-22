@@ -43,6 +43,19 @@ const auditToast = state(null); // { type: 'success' | 'error', text: '' }
 
 // Advanced Profiling State
 const cpuLoadPct = state(0);
+
+const browserOverheadMs = state(0);
+
+
+onRender(() => {
+  const start = performance.now();
+  setTimeout(() => {
+    const overhead = performance.now() - start;
+    // Cap to 0 if it's too small, sometimes timers are fuzzy
+    browserOverheadMs.value = Math.max(0, overhead - 1).toFixed(1);
+  }, 0);
+});
+
 const memoryChurnMb = state(0);
 const trueDomCount = state(0);
 
@@ -98,33 +111,33 @@ onRender(({ tTree, tHydrate, tTotal }) => {
 
   // Advanced Metrics Tracking
   timeSpentInFramework += tTotal;
-  const now = performance.now();
-  if (now - secondStartTime >= 1000) {
-    // 1. Calculate CPU Load (%) spent in fried.js main thread operations
-    cpuLoadPct.value = ((timeSpentInFramework / (now - secondStartTime)) * 100).toFixed(2);
-    timeSpentInFramework = 0;
-    secondStartTime = now;
-    
-    // 2. True DOM node count (skipping elements inside <head>)
-    if (typeof document !== "undefined") {
-      trueDomCount.value = document.body.querySelectorAll('*').length;
-    }
-  }
-
   // 3. Memory Churn tracking
   if (typeof performance !== "undefined" && performance.memory) {
     const currentMemory = performance.memory.usedJSHeapSize;
     if (previousMemoryTotal > 0) {
       if (currentMemory > previousMemoryTotal) {
-        // Normal allocation 
         accumulatedChurn += (currentMemory - previousMemoryTotal);
-      } else {
-        // GC swept, memory went down — ignore the drop, we only track total allocated size
       }
     }
     previousMemoryTotal = currentMemory;
-    // Keep it rolling per-render to show MB churned across last 120 samples
+  }
+
+  const now = performance.now();
+  if (now - secondStartTime >= 1000) {
+    // 1. Calculate CPU Load (%)
+    cpuLoadPct.value = ((timeSpentInFramework / (now - secondStartTime)) * 100).toFixed(2);
+    timeSpentInFramework = 0;
+    
+    // 2. Memory Churn (MB/s)
     memoryChurnMb.value = (accumulatedChurn / 1024 / 1024).toFixed(2);
+    accumulatedChurn = 0;
+
+    secondStartTime = now;
+    
+    // 3. True DOM node count
+    if (typeof document !== "undefined") {
+      trueDomCount.value = document.body.querySelectorAll('*').length;
+    }
   }
 });
 
@@ -233,7 +246,11 @@ const resetCount = action("resetCount", () => {
 });
 
 const setTab = action("setTab", (tabName) => {
-  activeTab.value = tabName;
+  if (activeTab.value !== tabName) {
+    if (tickerActive.value && typeof toggleChaosTicker === "function") toggleChaosTicker();
+    if (typeof svgTickerActive !== "undefined" && svgTickerActive.value && typeof toggleSvgTicker === "function") toggleSvgTicker();
+    activeTab.value = tabName;
+  }
 });
 
 const toggleInspectKeys = action("toggleInspectKeys", () => {
@@ -401,6 +418,44 @@ const toggleChaosTicker = action("toggleChaosTicker", () => {
     tickerTimerId = requestAnimationFrame(rafTick);
   }
 });
+
+
+const toggleMassCss = action("toggleMassCss", () => {
+  if (typeof document !== "undefined") {
+    document.body.classList.toggle("mass-css-stress");
+  }
+});
+
+
+
+const toggleMountThrashing = action("toggleMountThrashing", () => {
+  if (tickerActive.value) {
+    if (tickerTimerId) cancelAnimationFrame(tickerTimerId);
+    tickerTimerId = null;
+    tickerActive.value = false;
+  } else {
+    tickerActive.value = true;
+    lastFrameTimestamp = performance.now();
+    frameCounter = 0;
+    function rafTick(now) {
+      if (!tickerActive.value) return;
+      frameCounter++;
+      if (now - lastFrameTimestamp >= 500) {
+        currentFps = Math.round((frameCounter * 1000) / (now - lastFrameTimestamp));
+        frameCounter = 0; lastFrameTimestamp = now;
+      }
+      const n = stressNodes.value.length;
+      if (n > 0) {
+        const arr = new Array(n);
+        for (let i = 0; i < n; i++) arr[i] = createRichNode(i);
+        stressNodes.value = arr;
+      }
+      tickerTimerId = requestAnimationFrame(rafTick);
+    }
+    tickerTimerId = requestAnimationFrame(rafTick);
+  }
+});
+
 
 // --- Audit & Diagnostics Actions ---
 const sendAuditToServer = action("sendAuditToServer", async () => {
@@ -601,6 +656,66 @@ const runBrowserTests = action("runBrowserTests", () => {
 
 // --- Component Render Functions ---
 
+
+function renderGlobalTelemetry() {
+  const nodeCount = stressNodes.value.length;
+  const latencyClass = lastRenderDurationMs > 8 ? "bad" : lastRenderDurationMs > 3 ? "warn" : "good";
+  const fpsClass = currentFps < 30 ? "bad" : currentFps < 50 ? "warn" : "good";
+  
+  return ui("div", { key: "global-telemetry", style: "margin-bottom: 1rem;" }, [
+ui("div", { key: "bench-metrics-grid", class: "grid grid-4", style: "margin-bottom: 1.5rem;" }, [
+      ui("div", { key: "metric-count", class: "metric-card" }, [
+        ui("div", { key: "val-count", class: "metric-val" }, [nodeCount.toLocaleString()]),
+        ui("div", { key: "lbl-count", class: "metric-label" }, ["Virtual Data Cards"]),
+      ]),
+      ui("div", { key: "metric-elements", class: "metric-card" }, [
+        ui("div", { key: "val-elements", class: "metric-val" }, [trueDomCount.value.toLocaleString()]),
+        ui("div", { key: "lbl-elements", class: "metric-label" }, ["True DOM Elements"]),
+      ]),
+      ui("div", { key: "metric-latency", class: "metric-card" }, [
+        ui("div", { key: "val-latency", class: `metric-val ${latencyClass}` }, [
+          `${lastRenderDurationMs.toFixed(1)} ms`
+        ]),
+        ui("div", { key: "lbl-latency", class: "metric-label" }, ["Re-Render Latency"]),
+      ]),
+      ui("div", { key: "metric-fps", class: "metric-card" }, [
+        ui("div", { key: "val-fps", class: `metric-val ${fpsClass}` }, [
+          tickerActive.value ? `${currentFps} FPS` : "--"
+        ]),
+        ui("div", { key: "lbl-fps", class: "metric-label" }, ["Live Ticker Rate"]),
+      ]),
+    ]),
+    
+    // Advanced Hardware Telemetry Grid
+    ui("div", { key: "hw-metrics-grid", class: "grid grid-4", style: "margin-bottom: 1.5rem;", "class": "grid grid-5" }, [
+      ui("div", { key: "hw-cpu", class: "metric-card" }, [
+        ui("div", { key: "hw-val-cpu", class: "metric-val", style: "color: #3b82f6" }, [`${cpuLoadPct.value}%`]),
+        ui("div", { key: "hw-lbl-cpu", class: "metric-label" }, ["Main Thread CPU Load"]),
+      ]),
+      ui("div", { key: "hw-mem", class: "metric-card" }, [
+        ui("div", { key: "hw-val-mem", class: "metric-val", style: "color: #a855f7" }, [`${memoryChurnMb.value} MB/s`]),
+        ui("div", { key: "hw-lbl-mem", class: "metric-label" }, ["Memory Churn / GC Rate"]),
+      ]),
+      ui("div", { key: "hw-stalls", class: "metric-card" }, [
+        ui("div", { key: "hw-val-stalls", class: longTaskCount > 0 ? "metric-val bad" : "metric-val good" }, [longTaskCount.toLocaleString()]),
+        ui("div", { key: "hw-lbl-stalls", class: "metric-label" }, ["Long Task Stalls (>50ms)"]),
+      ]),
+      ui("div", { key: "hw-heap", class: "metric-card" }, [
+        ui("div", { key: "hw-val-heap", class: "metric-val" }, [
+          typeof performance !== "undefined" && performance.memory ? `${(performance.memory.usedJSHeapSize / 1024 / 1024).toFixed(0)} MB` : "N/A"
+        ]),
+        ui("div", { key: "hw-lbl-heap", class: "metric-label" }, ["Active JS Heap Size"]),
+      ]),
+      
+ui("div", { key: "hw-overhead", class: "metric-card" }, [
+  ui("div", { key: "hw-val-overhead", class: "metric-val", style: "color: #f59e0b" }, [`${browserOverheadMs.value} ms`]),
+  ui("div", { key: "hw-lbl-overhead", class: "metric-label" }, ["Paint / Layout Overhead"])
+])
+,
+    ]),
+  ]);
+}
+
 function renderHeader() {
   return ui("header", { key: "app-header" }, [
     ui("div", { key: "brand-bar", class: "brand" }, [
@@ -611,50 +726,35 @@ function renderHeader() {
       "Zero-build ES module runtime with in-place DOM hydration and AST-patchable keys."
     ]),
     ui("div", { key: "nav-controls", class: "button-row" }, [
-      ui(
-        "button",
-        {
-          key: "tab-showcase-btn",
-          class: activeTab.value === "showcase" ? "btn btn-primary" : "btn",
-          onclick: () => setTab("showcase"),
-        },
-        ["🚀 Interactive Showcase"]
-      ),
-      ui(
-        "button",
-        {
+      ui("button", {
           key: "tab-bench-btn",
           class: activeTab.value === "benchmark" ? "btn btn-primary" : "btn",
           onclick: () => setTab("benchmark"),
         },
-        ["⚡ Stress Test & Benchmark"]
+        ["⚡ Synthetic Benchmark"]
       ),
-      ui(
-        "button",
-        {
-          key: "tab-tests-btn",
-          class: activeTab.value === "tests" ? "btn btn-primary" : "btn",
-          onclick: () => {
-            setTab("tests");
-            if (!testSuiteResults.value) {
-              runBrowserTests();
-            }
-          },
-        },
-        ["🧪 In-Browser Test Suite"]
-      ),
-      ui(
-        "button",
-        {
+      ui("button", {
           key: "tab-db-btn",
           class: activeTab.value === "database" ? "btn btn-primary" : "btn",
           onclick: () => setTab("database"),
         },
-        ["💾 Local Database"]
+        ["💾 DB Admin Dashboard"]
       ),
-      ui(
-        "button",
-        {
+      ui("button", {
+          key: "tab-svg-btn",
+          class: activeTab.value === "svg" ? "btn btn-primary" : "btn",
+          onclick: () => setTab("svg"),
+        },
+        ["📈 Interactive SVG Chart"]
+      ),
+      ui("button", {
+          key: "tab-krausest-btn",
+          class: activeTab.value === "krausest" ? "btn btn-primary" : "btn",
+          onclick: () => setTab("krausest"),
+        },
+        ["🔬 JS Framework Bench"]
+      ),
+      ui("button", {
           key: "toggle-keys-btn",
           class: inspectKeysActive.value ? "btn btn-danger" : "btn",
           onclick: toggleInspectKeys,
@@ -718,6 +818,7 @@ function renderTodoCard() {
         type: "text",
         placeholder: "Type a task and press Enter or Add...",
         autocomplete: "off",
+        "aria-label": "Add a new task",
       }),
       ui("button", { key: "todo-submit-btn", class: "btn btn-primary", type: "submit" }, ["Add Task"]),
     ]),
@@ -905,18 +1006,10 @@ function renderAuditPanel() {
       ui("button", { key: "btn-dl-json", class: "btn", onclick: downloadAuditJson }, [
         "💾 Download JSON"
       ]),
-      ui("button", { key: "btn-reset-telemetry", class: "btn btn-danger", onclick: resetAuditSamples }, [
-        "🔄 Reset Samples"
+      ui("button", { key: "btn-reset-samples", class: "btn btn-danger", onclick: resetAuditSamples }, [
+        "🗑 Reset Samples"
       ]),
     ]),
-
-    // Toast feedback notification
-    auditToast.value
-      ? ui("div", { key: "audit-toast", class: "toast-banner toast-success" }, [
-          ui("span", { key: "toast-msg" }, [auditToast.value.text]),
-          ui("button", { key: "toast-close", class: "btn btn-sm", onclick: dismissToast, style: "padding: 0.1rem 0.4rem;" }, ["✕"]),
-        ])
-      : null,
   ]);
 }
 
@@ -950,52 +1043,6 @@ function renderBenchmarkCard() {
       ":"
     ]),
 
-    // Telemetry Metric Grid
-    ui("div", { key: "bench-metrics-grid", class: "grid grid-4", style: "margin-bottom: 1.5rem;" }, [
-      ui("div", { key: "metric-count", class: "metric-card" }, [
-        ui("div", { key: "val-count", class: "metric-val" }, [nodeCount.toLocaleString()]),
-        ui("div", { key: "lbl-count", class: "metric-label" }, ["Virtual Data Cards"]),
-      ]),
-      ui("div", { key: "metric-elements", class: "metric-card" }, [
-        ui("div", { key: "val-elements", class: "metric-val" }, [trueDomCount.value.toLocaleString()]),
-        ui("div", { key: "lbl-elements", class: "metric-label" }, ["True DOM Elements"]),
-      ]),
-      ui("div", { key: "metric-latency", class: "metric-card" }, [
-        ui("div", { key: "val-latency", class: `metric-val ${latencyClass}` }, [
-          `${lastRenderDurationMs.toFixed(1)} ms`
-        ]),
-        ui("div", { key: "lbl-latency", class: "metric-label" }, ["Re-Render Latency"]),
-      ]),
-      ui("div", { key: "metric-fps", class: "metric-card" }, [
-        ui("div", { key: "val-fps", class: `metric-val ${fpsClass}` }, [
-          tickerActive.value ? `${currentFps} FPS` : "--"
-        ]),
-        ui("div", { key: "lbl-fps", class: "metric-label" }, ["Live Ticker Rate"]),
-      ]),
-    ]),
-    
-    // Advanced Hardware Telemetry Grid
-    ui("div", { key: "hw-metrics-grid", class: "grid grid-4", style: "margin-bottom: 1.5rem;" }, [
-      ui("div", { key: "hw-cpu", class: "metric-card" }, [
-        ui("div", { key: "hw-val-cpu", class: "metric-val", style: "color: #3b82f6" }, [`${cpuLoadPct.value}%`]),
-        ui("div", { key: "hw-lbl-cpu", class: "metric-label" }, ["Main Thread CPU Load"]),
-      ]),
-      ui("div", { key: "hw-mem", class: "metric-card" }, [
-        ui("div", { key: "hw-val-mem", class: "metric-val", style: "color: #a855f7" }, [`${memoryChurnMb.value} MB/s`]),
-        ui("div", { key: "hw-lbl-mem", class: "metric-label" }, ["Memory Churn / GC Rate"]),
-      ]),
-      ui("div", { key: "hw-stalls", class: "metric-card" }, [
-        ui("div", { key: "hw-val-stalls", class: longTaskCount > 0 ? "metric-val bad" : "metric-val good" }, [longTaskCount.toLocaleString()]),
-        ui("div", { key: "hw-lbl-stalls", class: "metric-label" }, ["Long Task Stalls (>50ms)"]),
-      ]),
-      ui("div", { key: "hw-heap", class: "metric-card" }, [
-        ui("div", { key: "hw-val-heap", class: "metric-val" }, [
-          typeof performance !== "undefined" && performance.memory ? `${(performance.memory.usedJSHeapSize / 1024 / 1024).toFixed(0)} MB` : "N/A"
-        ]),
-        ui("div", { key: "hw-lbl-heap", class: "metric-label" }, ["Active JS Heap Size"]),
-      ]),
-    ]),
-
     // Action Buttons
     ui("div", { key: "bench-actions", class: "button-row" }, [
       ui("button", { key: "btn-gen-250", class: "btn btn-primary", onclick: () => generateStressNodes(250) }, ["+ 250 Nodes"]),
@@ -1014,6 +1061,8 @@ function renderBenchmarkCard() {
         [tickerActive.value ? "⏹ Stop Chaos Ticker" : "⚡ Start Chaos Ticker (30Hz)"]
       ),
       ui("button", { key: "btn-clear-nodes", class: "btn btn-danger", onclick: clearStressNodes, disabled: nodeCount === 0 }, ["Clear All"]),
+      ui("button", { key: "btn-thrash", class: tickerActive.value ? "btn btn-danger" : "btn btn-primary", onclick: toggleMountThrashing, disabled: nodeCount === 0 }, [tickerActive.value ? "⏹ Stop Thrashing" : "⚡ Mount/Unmount Thrashing"]),
+      ui("button", { key: "btn-mass-css", class: "btn", onclick: toggleMassCss }, ["🎨 Toggle Mass CSS Reflow"]),
     ]),
 
     // Audit Panel
@@ -1186,54 +1235,110 @@ function generateDbUsers(count) {
   db.collections.users.bulkInsert(users);
 }
 
+const dbSearchQuery = state("");
+const dbSortCol = state("id");
+const dbSortAsc = state(true);
+const dbViewport = state({ scrollTop: 0, height: 400 });
+
+const toggleDbSort = action("toggleDbSort", (col) => {
+  if (dbSortCol.value === col) {
+    dbSortAsc.value = !dbSortAsc.value;
+  } else {
+    dbSortCol.value = col;
+    dbSortAsc.value = true;
+  }
+});
+
 function renderDatabaseCard() {
-  const users = db.collections.users.value || [];
+  const allUsers = db.collections.users.value || [];
   
+  // 1. Filter
+  const query = dbSearchQuery.value.toLowerCase();
+  let processed = query ? allUsers.filter(u => 
+    u.name.toLowerCase().includes(query) || 
+    u.role.toLowerCase().includes(query)
+  ) : allUsers.slice();
+
+  // 2. Sort
+  const col = dbSortCol.value;
+  const asc = dbSortAsc.value ? 1 : -1;
+  processed.sort((a, b) => {
+    if (a[col] < b[col]) return -1 * asc;
+    if (a[col] > b[col]) return 1 * asc;
+    return 0;
+  });
+
+  // 3. Virtualization Math
+  const rowHeight = 35; // px per row
+  const totalRows = processed.length;
+  const totalHeight = totalRows * rowHeight;
+  const visibleRows = Math.ceil(dbViewport.value.height / rowHeight) + 2;
+  const startRow = Math.max(0, Math.floor(dbViewport.value.scrollTop / rowHeight) - 1);
+  const endRow = Math.min(totalRows, startRow + visibleRows);
+  
+  const visibleUsers = [];
+  for (let i = startRow; i < endRow; i++) {
+    const u = processed[i];
+    const top = i * rowHeight;
+    visibleUsers.push(
+      ui("div", { key: `user-${u.id}`, class: "db-row", style: `position: absolute; top: ${top}px; left: 0; right: 0; height: ${rowHeight}px; display: flex; align-items: center; border-bottom: 1px solid var(--border); padding: 0 8px; font-size: 0.85rem;` }, [
+        ui("div", { style: "width: 15%; font-family: var(--font-mono); color: var(--text-muted);" }, [String(u.id).slice(0,6)]),
+        ui("div", { style: "width: 35%; font-weight: 500;" }, [u.name]),
+        ui("div", { style: "width: 20%;" }, [u.role]),
+        ui("div", { style: "width: 15%;" }, [u.age]),
+        ui("div", { style: "width: 15%;" }, [
+          ui("button", { class: "btn btn-sm btn-danger", onclick: () => db.collections.users.remove(u.id) }, ["Delete"])
+        ])
+      ])
+    );
+  }
+
+  const sortIcon = (c) => dbSortCol.value === c ? (dbSortAsc.value ? " ↑" : " ↓") : "";
+
   return ui("div", { key: "db-card", class: "card" }, [
     ui("div", { key: "db-header", class: "card-header" }, [
-      ui("span", { key: "db-title", class: "card-title" }, ["💾 POES Fast Local Database"]),
-      ui("span", { key: "db-badge", class: "badge badge-blue" }, [`${users.length} Records`]),
+      ui("span", { key: "db-title", class: "card-title" }, ["💾 10k Data Grid Dashboard"]),
+      ui("span", { key: "db-badge", class: "badge badge-blue" }, [`${processed.length} Records`]),
     ]),
     ui("p", { key: "db-desc", style: "color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1.25rem;" }, [
-      "This demonstrates ",
-      ui("strong", {}, ["fried-db.js"]),
-      " — an in-memory reactive database backed asynchronously by IndexedDB. Reads are O(1) synchronous, triggering instant UI renders, while writes are flushed to disk in a non-blocking background thread."
+      "Tests live array filtering, multi-column sorting, and absolute DOM virtualization on 10,000 JSON records."
     ]),
     
     ui("div", { key: "db-actions", class: "button-row", style: "margin-bottom: 1rem;" }, [
       ui("button", { key: "btn-db-add-1", class: "btn btn-primary", onclick: () => generateDbUsers(1) }, ["+ Add 1 User"]),
-      ui("button", { key: "btn-db-add-1k", class: "btn btn-primary", onclick: () => generateDbUsers(1000) }, ["+ Bulk Insert 1,000"]),
       ui("button", { key: "btn-db-add-10k", class: "btn btn-primary", onclick: () => generateDbUsers(10000) }, ["+ Bulk Insert 10,000"]),
       ui("button", { key: "btn-db-clear", class: "btn btn-danger", onclick: () => db.collections.users.clear() }, ["🗑 Clear DB"]),
+      ui("input", { 
+        key: "db-search", 
+        type: "text", 
+        class: "input-text", 
+        placeholder: "Live Search Name/Role...", 
+        value: dbSearchQuery.value,
+        style: "flex: 1;",
+        oninput: action("dbSearch", (e) => { dbSearchQuery.value = e.target.value; })
+      })
     ]),
 
-    ui("div", { key: "db-table-wrap", style: "max-height: 400px; overflow-y: auto; border: 1px solid var(--border); border-radius: 4px;" }, [
-      users.length === 0 
-        ? ui("div", { style: "padding: 2rem; text-align: center; color: var(--text-muted);" }, ["Database is empty."])
-        : ui("table", { style: "width: 100%; border-collapse: collapse; text-align: left; font-size: 0.85rem;" }, [
-            ui("thead", { style: "background: var(--surface); position: sticky; top: 0;" }, [
-              ui("tr", {}, [
-                ui("th", { style: "padding: 8px; border-bottom: 1px solid var(--border);" }, ["ID"]),
-                ui("th", { style: "padding: 8px; border-bottom: 1px solid var(--border);" }, ["Name"]),
-                ui("th", { style: "padding: 8px; border-bottom: 1px solid var(--border);" }, ["Role"]),
-                ui("th", { style: "padding: 8px; border-bottom: 1px solid var(--border);" }, ["Age"]),
-                ui("th", { style: "padding: 8px; border-bottom: 1px solid var(--border);" }, ["Action"]),
-              ])
-            ]),
-            ui("tbody", {}, 
-              // Only render first 100 to DOM to avoid browser table layout stalling on 10k items
-              users.slice(0, 100).map(u => ui("tr", { key: `user-${u.id}` }, [
-                ui("td", { style: "padding: 8px; border-bottom: 1px solid var(--border); font-family: var(--font-mono); color: var(--text-muted);" }, [String(u.id).slice(0,6)]),
-                ui("td", { style: "padding: 8px; border-bottom: 1px solid var(--border);" }, [u.name]),
-                ui("td", { style: "padding: 8px; border-bottom: 1px solid var(--border);" }, [u.role]),
-                ui("td", { style: "padding: 8px; border-bottom: 1px solid var(--border);" }, [u.age]),
-                ui("td", { style: "padding: 8px; border-bottom: 1px solid var(--border);" }, [
-                  ui("button", { class: "btn btn-sm btn-danger", onclick: () => db.collections.users.remove(u.id) }, ["Delete"])
-                ])
-              ]))
-            )
-          ]),
-      users.length > 100 ? ui("div", { style: "padding: 10px; text-align: center; font-size: 0.8rem; color: var(--text-muted);" }, [`...and ${users.length - 100} more records (UI truncated to first 100 for speed)`]) : null
+    ui("div", { key: "db-table-wrap", style: "position: relative; border: 1px solid var(--border); border-radius: 4px;" }, [
+      // Table Header (Sticky mock)
+      ui("div", { key: "db-th", style: "display: flex; background: var(--surface); padding: 8px; font-weight: bold; font-size: 0.85rem; border-bottom: 2px solid var(--border);" }, [
+        ui("div", { style: "width: 15%; cursor: pointer;", onclick: () => toggleDbSort("id") }, ["ID" + sortIcon("id")]),
+        ui("div", { style: "width: 35%; cursor: pointer;", onclick: () => toggleDbSort("name") }, ["Name" + sortIcon("name")]),
+        ui("div", { style: "width: 20%; cursor: pointer;", onclick: () => toggleDbSort("role") }, ["Role" + sortIcon("role")]),
+        ui("div", { style: "width: 15%; cursor: pointer;", onclick: () => toggleDbSort("age") }, ["Age" + sortIcon("age")]),
+        ui("div", { style: "width: 15%;" }, ["Action"]),
+      ]),
+      // Virtualized Body
+      ui("div", { 
+        key: "db-tbody", 
+        style: `height: 400px; overflow-y: auto; position: relative;`,
+        onscroll: action("onDbScroll", (e) => {
+          dbViewport.value = { ...dbViewport.value, scrollTop: e.target.scrollTop };
+        })
+      }, [
+        ui("div", { key: "db-spanner", style: `position: absolute; top: 0; left: 0; width: 1px; height: ${totalHeight}px;` }),
+        ...visibleUsers
+      ])
     ])
   ]);
 }
@@ -1242,25 +1347,26 @@ function renderApp() {
   totalRenderCycles++;
 
   let mainContent;
-  if (activeTab.value === "showcase") {
-    mainContent = ui("div", { key: "showcase-view" }, [
-      ui("div", { key: "showcase-grid", class: "grid grid-2" }, [
-        renderCounterCard(),
-        renderTodoCard(),
-      ]),
-      renderArchitectureCard(),
-    ]);
-  } else if (activeTab.value === "benchmark") {
+  if (activeTab.value === "benchmark") {
     mainContent = ui("div", { key: "bench-view" }, [renderBenchmarkCard()]);
-  } else if (activeTab.value === "tests") {
-    mainContent = ui("div", { key: "tests-view" }, [renderTestSuiteCard()]);
   } else if (activeTab.value === "database") {
     mainContent = ui("div", { key: "db-view" }, [renderDatabaseCard()]);
+  } else if (activeTab.value === "svg") {
+    mainContent = ui("div", { key: "svg-view" }, [renderSvgChartCard()]);
+  } else if (activeTab.value === "krausest") {
+    mainContent = ui("div", { key: "krausest-view" }, [renderJsFrameworkBenchCard()]);
   }
 
   return ui("div", { key: "main-app-container", class: "container" }, [
     renderHeader(),
+    renderGlobalTelemetry(),
     mainContent,
+    auditToast.value
+      ? ui("div", { key: "audit-toast", class: `toast-banner toast-${auditToast.value.type === "success" ? "success" : "error"}`, style: "position: fixed; bottom: 20px; right: 20px; z-index: 9999;" }, [
+          ui("span", { key: "toast-msg" }, [auditToast.value.text]),
+          ui("button", { key: "toast-close", class: "btn btn-sm", onclick: dismissToast, style: "padding: 0.1rem 0.4rem; margin-left: 1rem;", "aria-label": "Close notification" }, ["✕"]),
+        ])
+      : null,
     ui("footer", { key: "app-footer" }, [
       ui("p", { key: "footer-text" }, [
         "Fried.js Library Tester • Pure Vanilla ES Modules • No Bundler Required"
@@ -1275,4 +1381,152 @@ if (mountTarget) {
   mount(renderApp, mountTarget);
 } else {
   console.error("No #app mount element found!");
+}
+
+// ==========================================
+// NEW BENCHMARK: SVG Interactive Chart
+// ==========================================
+const svgData = state([]);
+const svgTickerActive = state(false);
+let svgTickerId = null;
+
+let svgTick = 0;
+const toggleSvgTicker = action("toggleSvgTicker", () => {
+  if (svgTickerActive.value) {
+    if (svgTickerId) clearInterval(svgTickerId);
+    svgTickerId = null;
+    svgTickerActive.value = false;
+  } else {
+    svgTickerActive.value = true;
+    let data = [];
+    svgTick = 0;
+    for (let i = 0; i < 200; i++) {
+      const t = (svgTick + i) * 0.05;
+      data.push(150 + Math.sin(t) * 40 + Math.cos(t * 0.5) * 20 + Math.sin(t * 0.2) * 30 + (Math.sin(i * 47) * 4)); // deterministic "jitter"
+    }
+    svgData.value = data;
+    
+    svgTickerId = setInterval(() => {
+      svgTick++;
+      const arr = svgData.value.slice(1);
+      const t = (svgTick + 200) * 0.05;
+      const nextVal = 150 + Math.sin(t) * 40 + Math.cos(t * 0.5) * 20 + Math.sin(t * 0.2) * 30 + (Math.sin((svgTick + 200) * 47) * 4);
+      arr.push(nextVal);
+      svgData.value = arr;
+    }, 16); // 60fps data updates
+  }
+});
+
+function renderSvgChartCard() {
+  const points = svgData.value;
+  let pathD = "";
+  if (points.length > 0) {
+    pathD = `M 0 ${points[0]}`;
+    for (let i = 1; i < points.length; i++) {
+      pathD += ` L ${i * 5} ${points[i]}`;
+    }
+  }
+
+  return ui("div", { key: "svg-card", class: "card" }, [
+    ui("div", { key: "svg-header", class: "card-header" }, [
+      ui("span", { key: "svg-title", class: "card-title" }, ["📈 Interactive SVG Stock Chart"]),
+      ui("span", { key: "svg-badge", class: "badge badge-blue" }, [`${points.length} Points`]),
+    ]),
+    ui("p", { key: "svg-desc", style: "color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1.25rem;" }, [
+      "This test constructs a complex SVG graph. If a framework has namespace issues, SVG elements fail to render or update correctly. The path data updates 60 times a second."
+    ]),
+    ui("div", { key: "svg-actions", class: "button-row", style: "margin-bottom: 1rem;" }, [
+      ui("button", { key: "btn-svg-ticker", class: svgTickerActive.value ? "btn btn-danger" : "btn btn-primary", onclick: toggleSvgTicker }, [svgTickerActive.value ? "⏹ Stop Ticker" : "▶ Start Ticker"]),
+      ui("button", { key: "btn-svg-audit", class: "btn btn-primary", onclick: sendAuditToServer }, ["📤 Save Audit Log"])
+    ]),
+    ui("svg", { key: "svg-chart", width: "100%", height: "300", style: "background: var(--surface); border: 1px solid var(--border); border-radius: 4px;" }, [
+      ui("path", { key: "svg-path", d: pathD, fill: "none", stroke: "#3b82f6", "stroke-width": "2" }),
+      ...points.map((p, i) => ui("circle", { key: `pt-${i}`, cx: i * 5, cy: p, r: 2, fill: "#a855f7" }))
+    ])
+  ]);
+}
+
+// ==========================================
+// NEW BENCHMARK: JS Framework Benchmark (Krausest)
+// ==========================================
+const krausestRows = state([]);
+const krausestSelected = state(null);
+let nextKrausestId = 1;
+
+function buildKrausestData(count) {
+  const adjectives = ["pretty", "large", "big", "small", "tall", "short", "long", "handsome", "plain", "quaint", "clean", "elegant", "easy", "angry", "crazy", "helpful", "mushy", "odd", "unsightly", "adorable", "important", "inexpensive", "cheap", "expensive", "fancy"];
+  const colours = ["red", "yellow", "blue", "green", "pink", "brown", "purple", "brown", "white", "black", "orange"];
+  const nouns = ["table", "chair", "house", "bbq", "desk", "car", "pony", "cookie", "sandwich", "burger", "pizza", "mouse", "keyboard"];
+  
+  const data = [];
+  for (let i = 0; i < count; i++) {
+    data.push({
+      id: nextKrausestId++,
+      label: adjectives[Math.random()*adjectives.length|0] + " " + colours[Math.random()*colours.length|0] + " " + nouns[Math.random()*nouns.length|0]
+    });
+  }
+  return data;
+}
+
+const krausestRun = action("krausestRun", () => { krausestRows.value = buildKrausestData(1000); krausestSelected.value = null; });
+const krausestRunLots = action("krausestRunLots", () => { krausestRows.value = buildKrausestData(10000); krausestSelected.value = null; });
+const krausestAdd = action("krausestAdd", () => { krausestRows.value = krausestRows.value.concat(buildKrausestData(1000)); });
+const krausestUpdate = action("krausestUpdate", () => {
+  const current = krausestRows.value.slice();
+  for (let i = 0; i < current.length; i += 10) {
+    current[i] = Object.assign({}, current[i], { label: current[i].label + ' !!!' });
+  }
+  krausestRows.value = current;
+});
+const krausestClear = action("krausestClear", () => { krausestRows.value = []; krausestSelected.value = null; });
+const krausestSwapRows = action("krausestSwapRows", () => {
+  const current = krausestRows.value.slice();
+  if (current.length > 998) {
+    let tmp = current[1];
+    current[1] = current[998];
+    current[998] = tmp;
+    krausestRows.value = current;
+  }
+});
+
+function renderJsFrameworkBenchCard() {
+  const rows = krausestRows.value;
+  return ui("div", { key: "krausest-card", class: "card" }, [
+    ui("div", { key: "k-header", class: "card-header" }, [
+      ui("span", { key: "k-title", class: "card-title" }, ["🔬 JS Framework Benchmark"]),
+    ]),
+    ui("p", { key: "k-desc", style: "color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1.25rem;" }, [
+      "The official standard test for UI frameworks (krausest). No virtualization, just raw DOM node manipulation."
+    ]),
+    ui("div", { key: "k-actions", class: "button-row", style: "margin-bottom: 1rem; flex-wrap: wrap;" }, [
+      ui("button", { key: "btn-run", class: "btn btn-primary", onclick: krausestRun }, ["Create 1,000 rows"]),
+      ui("button", { key: "btn-runlots", class: "btn btn-primary", onclick: krausestRunLots }, ["Create 10,000 rows"]),
+      ui("button", { key: "btn-add", class: "btn btn-primary", onclick: krausestAdd }, ["Append 1,000 rows"]),
+      ui("button", { key: "btn-update", class: "btn btn-primary", onclick: krausestUpdate }, ["Update every 10th row"]),
+      ui("button", { key: "btn-clear", class: "btn btn-primary", onclick: krausestClear }, ["Clear"]),
+      ui("button", { key: "btn-swap", class: "btn btn-primary", onclick: krausestSwapRows }, ["Swap Rows"]),
+    ]),
+    ui("table", { key: "k-table", class: "table table-hover table-striped test-data", style: "width: 100%; text-align: left; border-collapse: collapse; font-size: 0.9rem;" }, [
+      ui("tbody", { key: "k-tbody" }, 
+        rows.map(r => 
+          ui("tr", { key: `r-${r.id}`, class: r.id === krausestSelected.value ? "danger" : "", style: r.id === krausestSelected.value ? "background: #ef444450;" : "" }, [
+            ui("td", { class: "col-md-1", style: "padding: 8px; border-bottom: 1px solid var(--border);" }, [r.id]),
+            ui("td", { class: "col-md-4", style: "padding: 8px; border-bottom: 1px solid var(--border);" }, [
+              ui("a", { onclick: () => { krausestSelected.value = r.id; }, style: "cursor:pointer; color: #3b82f6;" }, [r.label])
+            ]),
+            ui("td", { class: "col-md-1", style: "padding: 8px; border-bottom: 1px solid var(--border);" }, [
+              ui("a", { onclick: () => { 
+                const current = krausestRows.value.slice();
+                const idx = current.findIndex(x => x.id === r.id);
+                if (idx > -1) { current.splice(idx, 1); krausestRows.value = current; }
+              }, style: "cursor:pointer;" }, [
+                ui("span", { class: "glyphicon glyphicon-remove", "aria-hidden": "true" }, ["❌"])
+              ])
+            ]),
+            ui("td", { class: "col-md-6", style: "padding: 8px; border-bottom: 1px solid var(--border);" })
+          ])
+        )
+      )
+    ])
+  ]);
 }

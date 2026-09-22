@@ -9,7 +9,7 @@ let root, renderFn, pendingRender = false, renderHooks = [];
 
 export function mount(fn, el)  { renderFn = fn; root = el; render(); }
 export function onRender(fn)   { renderHooks.push(fn); return () => { renderHooks = renderHooks.filter(h => h !== fn); }; }
-export function nextTick(fn)   { return fn ? queueMicrotask(fn) : new Promise(r => queueMicrotask(r)); }
+export function nextTick(fn)   { return fn ? queueMicrotask(fn) : new Promise(queueMicrotask); }
 export function uid()          { return Math.random().toString(36).slice(2, 10); }
 
 function scheduleRender() {
@@ -20,20 +20,22 @@ function scheduleRender() {
 
 export function render() {
   if (!root || !renderFn) return;
-  const t0 = t(), next = renderFn(), tTree = t() - t0;
-  if (!next) { root.innerHTML = ""; return; }
+  const t0 = t(), nextVnode = renderFn(), tTree = t() - t0;
+  if (!nextVnode) { root.textContent = ""; return; }
   const t1 = t();
-  root.firstElementChild ? hydrate(root.firstElementChild, next) : root.appendChild(next);
+  if (root.firstElementChild) {
+    hydrate(root.firstElementChild, nextVnode);
+  } else {
+    root.appendChild(createDom(nextVnode));
+  }
   const tHydrate = t() - t1;
   for (const h of renderHooks) { try { h({ tTree, tHydrate, tTotal: tTree + tHydrate, timestamp: Date.now() }); } catch(_) {} }
 }
 
 // -- CSS Engine ----------------------------------------------------------
-// css(rules) injects a <style> tag once, dedupes by content, returns class map.
-// cssVar(name, val?) gets/sets CSS custom properties — zero re-render cost.
 
 let _sheet = null;
-const _cssCache = new Map(); // decl string → generated class name
+const _cssCache = new Map(); 
 
 function ensureSheet() {
   if (_sheet) return;
@@ -50,8 +52,7 @@ export function css(rules) {
     const decl = rules[name];
     let cls = _cssCache.get(decl);
     if (!cls) {
-      cls = "f" + _cssCache.size.toString(36);
-      _cssCache.set(decl, cls);
+      _cssCache.set(decl, cls = "f" + _cssCache.size.toString(36));
       _sheet.insertRule(`.${cls}{${decl}}`, _sheet.cssRules.length);
     }
     out[name] = cls;
@@ -66,81 +67,135 @@ export function cssVar(name, value) {
 
 // -- DOM Reconciliation --------------------------------------------------
 
+function createDom(v) {
+  if (typeof v === "string" || typeof v === "number") return document.createTextNode(v);
+  
+  const isSvg = v.tag === "svg" || v.tag === "path" || v.tag === "circle" || v.tag === "g" || v.tag === "rect" || v.tag === "line" || v.tag === "polygon" || v.tag === "polyline" || v.tag === "text";
+  const el = isSvg ? document.createElementNS("http://www.w3.org/2000/svg", v.tag) : document.createElement(v.tag);
+  
+  el._friedKey = v._friedKey;
+  el._friedHandlers = v._friedHandlers;
+  el._friedProps = v.props;
+  
+  if (v._friedHandlers) {
+    for (const evt in v._friedHandlers) {
+      el.addEventListener(evt, e => el._friedHandlers?.[evt]?.(e));
+    }
+  }
+  
+  for (const k in v.props) {
+    const val = v.props[k];
+    if (k === "key") continue;
+    if (k === "class") {
+      if (isSvg) el.setAttribute("class", val); else el.className = val;
+    } else if (k === "checked") el.checked = !!val;
+    else if (k.startsWith("on")) {} 
+    else if (val !== false && val != null) el.setAttribute(k, val);
+  }
+  
+  for (let i = 0; i < v.children.length; i++) {
+    el.appendChild(createDom(v.children[i]));
+  }
+  return el;
+}
+
+const EMPTY = {};
+
 function hydrate(o, n) {
-  if (o.nodeType === 3 && n.nodeType === 3) {
-    if (o.nodeValue !== n.nodeValue) o.nodeValue = n.nodeValue;
+  const isTextN = typeof n === "string" || typeof n === "number";
+  if (o.nodeType === 3 && isTextN) {
+    if (o.nodeValue != n) o.nodeValue = String(n);
     return o;
   }
-  if (o.nodeType !== n.nodeType || o.tagName !== n.tagName) {
-    o.replaceWith(n); return n;
+  
+  const tagO = o.tagName ? o.tagName.toLowerCase() : null;
+  const tagN = isTextN ? null : n.tag; // n.tag is already lowercase from ui()
+  
+  if (o.nodeType !== (isTextN ? 3 : 1) || tagO !== tagN) {
+    const newEl = createDom(n);
+    o.replaceWith(newEl);
+    return newEl;
   }
+  
   hydrateAttrs(o, n);
   hydrateChildren(o, n);
   return o;
 }
 
-const EMPTY = {};
-
 function hydrateAttrs(o, n) {
-  const op = o._friedProps || EMPTY, np = n._friedProps || EMPTY;
-
+  const op = o._friedProps || EMPTY, np = n.props || EMPTY;
+  const isSvg = o.namespaceURI === "http://www.w3.org/2000/svg";
+  
   for (const k in np) {
     const nv = np[k];
-    if (op[k] === nv) continue;           // unchanged — skip
-    if      (k === "class")   o.className = nv || "";
-    else if (k === "checked") o.checked = !!nv;
+    if (op[k] === nv || k === "key") continue;
+    if (k === "class") {
+      if (isSvg) o.setAttribute("class", nv || "");
+      else o.className = nv || "";
+    } else if (k === "checked") o.checked = !!nv;
     else if (k === "value")   { if (o !== document.activeElement) o.value = nv; }
-    else if (k === "key")     {} // never set as DOM attr
-    else if (k.startsWith("on")) {}        // handlers forwarded below
+    else if (k.startsWith("on")) {
+      const evt = k.slice(2).toLowerCase();
+      if (!o._friedHandlers?.[evt]) o.addEventListener(evt, e => o._friedHandlers?.[evt]?.(e));
+    }
     else if (nv === false || nv == null)   o.removeAttribute(k);
     else                                   o.setAttribute(k, nv);
   }
 
-  // Remove props no longer in new render
   for (const k in op) {
-    if (k in np) continue; // Zero-allocation check instead of a Set
-    if      (k === "class")              o.className = "";
-    else if (k === "checked")            o.checked = false;
-    else if (!k.startsWith("on") && k !== "key") o.removeAttribute(k);
+    if (k in np || k === "key") continue;
+    if (k === "class") {
+      if (isSvg) o.removeAttribute("class");
+      else o.className = "";
+    } else if (k === "checked") o.checked = false;
+    else if (!k.startsWith("on")) o.removeAttribute(k);
   }
 
-  if (n._friedHandlers) o._friedHandlers = Object.assign(o._friedHandlers || {}, n._friedHandlers);
+  o._friedHandlers = n._friedHandlers;
   o._friedProps = np;
 }
 
 function hydrateChildren(op, np) {
-  const oc = op.childNodes, nc = np.childNodes;
+  const oc = op.childNodes, nc = np.children;
   const ol = oc.length, nl = nc.length, cl = Math.min(ol, nl);
 
-  // Fast-path: identical key sequence — 1-to-1 in-place diff
   let seq = true;
   for (let i = 0; i < cl; i++) {
     const oNode = oc[i], nNode = nc[i];
-    if (oNode._friedKey !== nNode._friedKey || oNode.nodeType !== nNode.nodeType || oNode.tagName !== nNode.tagName) {
-      seq = false; break;
-    }
+    const nKey = typeof nNode === "object" ? nNode._friedKey : undefined;
+    const isTextN = typeof nNode === "string" || typeof nNode === "number";
+    const tagN = isTextN ? null : nNode.tag;
+    const tagO = oNode.tagName ? oNode.tagName.toLowerCase() : null;
+
+    if (oNode._friedKey !== nKey || oNode.nodeType !== (isTextN ? 3 : 1) || tagO !== tagN) { seq = false; break; }
   }
+  
   if (seq && ol === nl) {
     for (let i = 0; i < ol; i++) hydrate(oc[i], nc[i]);
     return;
   }
 
-  // Keyed fallback: Map reconciliation for insertions, deletions, reorders
-  const km = new Map();
-  for (let i = 0; i < ol; i++) { const k = oc[i]._friedKey; if (k) km.set(k, oc[i]); }
+  let km;
+  for (let i = 0; i < ol; i++) {
+    const k = oc[i]._friedKey;
+    if (k) (km ??= new Map()).set(k, oc[i]);
+  }
 
+  const ncArr = nc; 
   for (let i = 0; i < nl; i++) {
-    const nc_i = nc[i], k = nc_i._friedKey;
-    const match = k ? km.get(k) : oc[i];
+    const nc_i = ncArr[i];
+    const k = typeof nc_i === "object" ? nc_i._friedKey : undefined;
+    const match = k ? km?.get(k) : oc[i];
+    
     if (match?.parentNode === op) {
       if (k) km.delete(k);
       if (op.childNodes[i] !== match) op.insertBefore(match, op.childNodes[i] || null);
       hydrate(match, nc_i);
     } else {
-      op.insertBefore(nc_i, op.childNodes[i] || null);
+      op.insertBefore(createDom(nc_i), op.childNodes[i] || null);
     }
   }
-  while (op.childNodes.length > nl) op.removeChild(op.lastChild);
+  while (op.childNodes.length > nl) op.lastChild.remove();
 }
 
 // -- Reactive Primitives -------------------------------------------------
@@ -160,41 +215,36 @@ export function action(name, fn) {
 }
 
 // -- Element Builder -----------------------------------------------------
-// ui(tag, props, children) → real DOM element.
-// Props are cached as _friedProps for zero-reflection diffing.
-// Event handlers are stored in _friedHandlers for closure-forwarding.
 
 export function ui(tag, props = {}, children = []) {
-  const el = document.createElement(tag);
-  el._friedProps = props;
-  el._friedKey = props.key;
-
-  for (const k in props) {
-    const v = props[k];
-    if      (k === "key")                   el.dataset.friedKey = v;
-    else if (k === "class")                 el.className = v;
-    else if (k === "checked")               el.checked = !!v;
-    else if (k.startsWith("on") && typeof v === "function") {
-      const evt = k.slice(2).toLowerCase();
-      if (!el._friedHandlers) el._friedHandlers = {};
-      el._friedHandlers[evt] = v;
-      el.addEventListener(evt, e => el._friedHandlers[evt]?.(e));
-    } else if (v !== false && v != null)    el.setAttribute(k, v);
+  if (tag === "img") {
+    if (props.loading === undefined) props.loading = "lazy";
+    if (props.decoding === undefined) props.decoding = "async";
+  } else if (props.onclick && tag !== "button" && tag !== "a") {
+    if (!props.role) props.role = "button";
+    if (props.tabIndex === undefined) props.tabIndex = 0;
   }
 
-  // Flatten children without Array.flat() allocation
+  const flatChildren = [];
   for (let i = 0; i < children.length; i++) {
     const c = children[i];
     if (c == null || c === false) continue;
     if (Array.isArray(c)) {
       for (let j = 0; j < c.length; j++) {
         const cc = c[j];
-        if (cc == null || cc === false) continue;
-        el.appendChild(typeof cc === "string" || typeof cc === "number" ? document.createTextNode(String(cc)) : cc);
+        if (cc != null && cc !== false) flatChildren.push(cc);
       }
     } else {
-      el.appendChild(typeof c === "string" || typeof c === "number" ? document.createTextNode(String(c)) : c);
+      flatChildren.push(c);
     }
   }
-  return el;
+
+  const handlers = {};
+  for (const k in props) {
+    if (k.startsWith("on") && typeof props[k] === "function") {
+      handlers[k.slice(2).toLowerCase()] = props[k];
+    }
+  }
+
+  return { tag: tag.toLowerCase(), props, children: flatChildren, _friedKey: props.key, _friedHandlers: handlers };
 }
