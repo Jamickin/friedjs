@@ -64,30 +64,6 @@ export function cssVar(name, value) {
   document.documentElement.style.setProperty(name, String(value));
 }
 
-// -- Time-sliced rendering -----------------------------------------------
-// sliceRender(items, chunkSize, onChunk, onDone)
-// Shows first chunk synchronously, fills rest in idle callbacks.
-
-const ric = typeof requestIdleCallback !== "undefined"
-  ? fn => requestIdleCallback(fn, { timeout: 100 })
-  : fn => requestAnimationFrame(() => fn({ timeRemaining: () => 16 }));
-
-export function sliceRender(items, chunkSize = 200, onChunk, onDone) {
-  let committed = Math.min(chunkSize, items.length);
-  onChunk(items.slice(0, committed));
-  if (committed >= items.length) { onDone?.(); return; }
-
-  (function next() {
-    ric(deadline => {
-      while (committed < items.length && deadline.timeRemaining() > 1) {
-        committed = Math.min(committed + chunkSize, items.length);
-        onChunk(items.slice(0, committed));
-      }
-      committed < items.length ? next() : onDone?.();
-    });
-  })();
-}
-
 // -- DOM Reconciliation --------------------------------------------------
 
 function hydrate(o, n) {
