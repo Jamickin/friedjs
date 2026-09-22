@@ -69,6 +69,47 @@ export function nextTick(fn) {
   return fn ? queueMicrotask(fn) : new Promise((res) => queueMicrotask(res));
 }
 
+/**
+ * Time-sliced list renderer. Breaks large item arrays into chunks and
+ * renders each chunk inside a requestIdleCallback (or rAF fallback),
+ * keeping the main thread free between chunks.
+ *
+ * Usage: await sliceRender(items, 200, (chunk) => { myState.value = chunk; });
+ *
+ * @param {Array}    items       Full item list to render progressively
+ * @param {number}   chunkSize   Items per frame budget (default 200)
+ * @param {Function} onChunk     Called with the growing committed slice each frame
+ * @param {Function} [onDone]    Optional callback when all chunks committed
+ */
+export function sliceRender(items, chunkSize = 200, onChunk, onDone) {
+  // requestIdleCallback with 16ms deadline fallback
+  const ric = typeof requestIdleCallback !== "undefined"
+    ? (fn) => requestIdleCallback(fn, { timeout: 100 })
+    : (fn) => requestAnimationFrame(() => fn({ timeRemaining: () => 16 }));
+
+  let committed = 0;
+
+  function scheduleChunk() {
+    ric((deadline) => {
+      // Fill as many chunks as we have idle time for
+      while (committed < items.length && deadline.timeRemaining() > 1) {
+        committed = Math.min(committed + chunkSize, items.length);
+        onChunk(items.slice(0, committed));
+      }
+      if (committed < items.length) {
+        scheduleChunk();
+      } else {
+        onDone?.();
+      }
+    });
+  }
+
+  // Render first chunk synchronously so UI appears instantly
+  committed = Math.min(chunkSize, items.length);
+  onChunk(items.slice(0, committed));
+  if (committed < items.length) scheduleChunk();
+}
+
 /** In-place DOM reconciliation / hydration */
 function hydrate(oldNode, newNode) {
   // 1. Text node reconciliation

@@ -1,4 +1,4 @@
-import { mount, state, action, ui, uid, onRender } from "./fried.js";
+import { mount, state, action, ui, uid, onRender, sliceRender } from "./fried.js";
 
 // --- State Definitions ---
 const count = state(0);
@@ -15,6 +15,7 @@ const testSuiteResults = state(null);
 // --- Stress Test State & Telemetry ---
 const stressNodes = state([]);
 const tickerActive = state(false);
+const loadingProgress = state(null); // null | { loaded: N, total: N }
 const auditToast = state(null); // { type: 'success' | 'error', text: '' }
 
 let lastRenderDurationMs = 0;
@@ -219,11 +220,27 @@ function createRichNode(idx) {
 }
 
 const generateStressNodes = action("generateStressNodes", (targetCount) => {
+  // Build full list up front (fast, no DOM involved yet)
   const list = [];
   for (let i = 0; i < targetCount; i++) {
     list.push(createRichNode(i));
   }
-  stressNodes.value = list;
+
+  // Hand off to sliceRender — shows first 200 nodes instantly,
+  // fills the rest in idle-callback chunks to keep the main thread free
+  loadingProgress.value = { loaded: 0, total: targetCount };
+  sliceRender(
+    list,
+    200,
+    (chunk) => {
+      stressNodes.value = chunk;
+      loadingProgress.value = { loaded: chunk.length, total: targetCount };
+    },
+    () => {
+      // All chunks done — clear progress bar
+      loadingProgress.value = null;
+    }
+  );
 });
 
 const mutateRandomNodes = action("mutateRandomNodes", () => {
@@ -231,19 +248,24 @@ const mutateRandomNodes = action("mutateRandomNodes", () => {
   if (current.length === 0) return;
 
   const statuses = ["HEALTHY", "WARNING", "CRITICAL"];
-  stressNodes.value = current.map((item) => {
-    // Mutate 25% of nodes
+  // Memoized: reuse unchanged object references — only allocate new objects
+  // for the 25% that actually changed. Skips 75% of JS object creation.
+  const next = new Array(current.length);
+  for (let i = 0; i < current.length; i++) {
     if (Math.random() < 0.25) {
-      return {
+      const item = current[i];
+      next[i] = {
         ...item,
         status: statuses[Math.floor(Math.random() * 3)],
         load: Math.floor(Math.random() * 95) + 5,
         latency: `${(Math.random() * 40 + 2).toFixed(1)}ms`,
         hash: `0x${Math.random().toString(16).slice(2, 10).toUpperCase()}`,
       };
+    } else {
+      next[i] = current[i]; // Same reference — hydrator fast-path skips it
     }
-    return item;
-  });
+  }
+  stressNodes.value = next;
 });
 
 const mutateSingleNode = action("mutateSingleNode", (id) => {
@@ -877,8 +899,27 @@ function renderBenchmarkCard() {
     // Audit Panel
     renderAuditPanel(),
 
+    // Progress bar while sliceRender fills chunks
+    loadingProgress.value
+      ? ui("div", { key: "bench-loading", style: "margin-top: 1.5rem;" }, [
+          ui("div", { key: "bench-loading-label", style: "font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem; display: flex; justify-content: space-between;" }, [
+            ui("span", {}, [`⏳ Loading nodes via time-sliced rendering...`]),
+            ui("span", { style: "font-family: var(--font-mono);" }, [
+              `${loadingProgress.value.loaded.toLocaleString()} / ${loadingProgress.value.total.toLocaleString()}`
+            ]),
+          ]),
+          ui("div", { key: "bench-progress-track", class: "meter-track", style: "height: 10px; border-radius: 5px;" }, [
+            ui("div", {
+              key: "bench-progress-bar",
+              class: "meter-bar",
+              style: `width: ${Math.round((loadingProgress.value.loaded / loadingProgress.value.total) * 100)}%; transition: width 0.15s;`,
+            }),
+          ]),
+        ])
+      : null,
+
     // Rich Node Grid View
-    nodeCount === 0
+    nodeCount === 0 && !loadingProgress.value
       ? ui("div", { key: "bench-empty", class: "info-box", style: "margin-top: 1.5rem;" }, [
           "💡 Click one of the buttons above (e.g. ",
           ui("strong", {}, ["+ 1,000 Nodes"]),
