@@ -103,12 +103,12 @@ function hydrate(o, n) {
   return o;
 }
 
+const EMPTY = {};
+
 function hydrateAttrs(o, n) {
-  const op = o._friedProps || {}, np = n._friedProps || {};
-  const seen = new Set();
+  const op = o._friedProps || EMPTY, np = n._friedProps || EMPTY;
 
   for (const k in np) {
-    seen.add(k);
     const nv = np[k];
     if (op[k] === nv) continue;           // unchanged — skip
     if      (k === "class")   o.className = nv || "";
@@ -122,7 +122,7 @@ function hydrateAttrs(o, n) {
 
   // Remove props no longer in new render
   for (const k in op) {
-    if (seen.has(k)) continue;
+    if (k in np) continue; // Zero-allocation check instead of a Set
     if      (k === "class")              o.className = "";
     else if (k === "checked")            o.checked = false;
     else if (!k.startsWith("on") && k !== "key") o.removeAttribute(k);
@@ -139,7 +139,8 @@ function hydrateChildren(op, np) {
   // Fast-path: identical key sequence — 1-to-1 in-place diff
   let seq = true;
   for (let i = 0; i < cl; i++) {
-    if (oc[i]._friedKey !== nc[i]._friedKey || oc[i].nodeType !== nc[i].nodeType || oc[i].tagName !== nc[i].tagName) {
+    const oNode = oc[i], nNode = nc[i];
+    if (oNode._friedKey !== nNode._friedKey || oNode.nodeType !== nNode.nodeType || oNode.tagName !== nNode.tagName) {
       seq = false; break;
     }
   }
