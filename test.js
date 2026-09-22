@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { state, action, uid } from "./fried.js";
-import { setProp, setChildText, addChild, addStatementAfter, validate, PatchError } from "./patcher.js";
+import { setProp, setChildText, addChild, addStatementAfter, removeChild, renameAction, validate, PatchError } from "./patcher.js";
 
 test("fried.js: state() creates reactive getter and setter", () => {
   const count = state(0);
@@ -70,5 +70,29 @@ test("patcher.js: addStatementAfter() inserts top-level statement", () => {
 const app = ui("div", { key: "root" }, []);`;
   const patched = addStatementAfter(src, "initialCount", `const maxCount = 100;`);
   assert.ok(patched.includes("const maxCount = 100;"));
+  assert.ok(validate(patched).ok);
+});
+
+test("patcher.js: removeChild() deletes inline ui child node", () => {
+  const src = `const list = ui("ul", { key: "list" }, [
+    ui("li", { key: "item-1" }, []),
+    ui("li", { key: "item-2" }, []),
+    ui("li", { key: "item-3" }, [])
+  ]);`;
+  const patched = removeChild(src, "list", "item-2");
+  assert.ok(!patched.includes("item-2"));
+  assert.ok(patched.includes("item-1"));
+  assert.ok(patched.includes("item-3"));
+  assert.ok(validate(patched).ok);
+});
+
+test("patcher.js: renameAction() renames declaration and references", () => {
+  const src = `const oldDoThing = action("oldDoThing", () => {});
+const btn = ui("button", { key: "btn", onclick: oldDoThing }, []);`;
+  const patched = renameAction(src, "oldDoThing", "newDoThing");
+  assert.ok(!patched.includes("oldDoThing"));
+  assert.ok(patched.includes('action("newDoThing"'));
+  assert.ok(patched.includes("const newDoThing ="));
+  assert.ok(patched.includes("onclick: newDoThing"));
   assert.ok(validate(patched).ok);
 });

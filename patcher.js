@@ -181,3 +181,87 @@ export function validate(source) {
     return { ok: false, error: err.message };
   }
 }
+
+
+/** Removes a child from the ui(...) call if it is an inline ui(...) call with the given childKey. */
+export function removeChild(source, parentKey, childKey) {
+  const ast = parseSource(source);
+  const node = requireUiNode(ast, parentKey);
+  const childrenArg = node.arguments[2];
+  if (!childrenArg || childrenArg.type !== "ArrayExpression") {
+    throw new PatchError(`ui(...) call with key "${parentKey}" has no literal children array`);
+  }
+  
+  let targetIndex = -1;
+  for (let i = 0; i < childrenArg.elements.length; i++) {
+    const el = childrenArg.elements[i];
+    if (!el || el.type !== "CallExpression") continue;
+    if (el.callee.type !== "Identifier" || el.callee.name !== "ui") continue;
+    const propsArg = el.arguments[1];
+    if (!propsArg || propsArg.type !== "ObjectExpression") continue;
+    const keyProp = propsArg.properties.find(
+      (p) => p.type === "Property" && p.key.type === "Identifier" && p.key.name === "key" && p.value.type === "Literal"
+    );
+    if (keyProp && keyProp.value.value === childKey) {
+      targetIndex = i;
+      break;
+    }
+  }
+  
+  if (targetIndex === -1) throw new PatchError(`no inline child ui(...) call with key "${childKey}" found under parent "${parentKey}"`);
+  
+  const ms = new MagicString(source);
+  const target = childrenArg.elements[targetIndex];
+  
+  // Find the exact range to remove, including trailing/leading commas
+  let start = target.start;
+  let end = target.end;
+  
+  if (targetIndex > 0) {
+    const prev = childrenArg.elements[targetIndex - 1];
+    const between = source.slice(prev.end, target.start);
+    const commaIdx = between.lastIndexOf(",");
+    if (commaIdx !== -1) start = prev.end + commaIdx;
+  } else if (targetIndex < childrenArg.elements.length - 1) {
+    const next = childrenArg.elements[targetIndex + 1];
+    const between = source.slice(target.end, next.start);
+    const commaIdx = between.indexOf(",");
+    if (commaIdx !== -1) end = target.end + commaIdx + 1;
+  }
+  
+  ms.remove(start, end);
+  return ms.toString();
+}
+
+/** Renames an action and all references to it throughout the file. */
+export function renameAction(source, oldName, newName) {
+  const ast = parseSource(source);
+  const ms = new MagicString(source);
+  let foundActionDeclaration = false;
+  
+  walk.simple(ast, {
+    CallExpression(node) {
+      if (node.callee.type === "Identifier" && node.callee.name === "action") {
+        if (node.arguments.length > 0 && node.arguments[0].type === "Literal" && node.arguments[0].value === oldName) {
+          ms.overwrite(node.arguments[0].start, node.arguments[0].end, JSON.stringify(newName));
+          foundActionDeclaration = true;
+        }
+      }
+    },
+    Identifier(node) {
+      if (node.name === oldName) {
+        ms.overwrite(node.start, node.end, newName);
+      }
+    },
+    VariableDeclarator(node) {
+      if (node.id.type === "Identifier" && node.id.name === oldName) {
+        ms.overwrite(node.id.start, node.id.end, newName);
+      }
+    }
+  
+  });
+  if (!foundActionDeclaration) {
+    throw new PatchError(`No action("${oldName}", ...) declaration found.`);
+  }
+  return ms.toString();
+}
