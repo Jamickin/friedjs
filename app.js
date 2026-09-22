@@ -34,6 +34,17 @@ const tickerActive = state(false);
 const viewport = state({ scrollTop: 0, width: typeof window !== "undefined" ? window.innerWidth : 1200 }); 
 const auditToast = state(null); // { type: 'success' | 'error', text: '' }
 
+// Advanced Profiling State
+const cpuLoadPct = state(0);
+const memoryChurnMb = state(0);
+const trueDomCount = state(0);
+
+// CPU/Memory tracking variables
+let secondStartTime = typeof performance !== "undefined" ? performance.now() : 0;
+let timeSpentInFramework = 0;
+let previousMemoryTotal = 0;
+let accumulatedChurn = 0;
+
 // Track window resizes to reflow the virtual grid
 if (typeof window !== "undefined") {
   window.addEventListener("resize", () => {
@@ -76,6 +87,38 @@ onRender(({ tTree, tHydrate, tTotal }) => {
     renderSamples.shift();
   }
   lastRenderDurationMs = tTotal;
+  totalRenderCycles++;
+
+  // Advanced Metrics Tracking
+  timeSpentInFramework += tTotal;
+  const now = performance.now();
+  if (now - secondStartTime >= 1000) {
+    // 1. Calculate CPU Load (%) spent in fried.js main thread operations
+    cpuLoadPct.value = ((timeSpentInFramework / (now - secondStartTime)) * 100).toFixed(2);
+    timeSpentInFramework = 0;
+    secondStartTime = now;
+    
+    // 2. True DOM node count (skipping elements inside <head>)
+    if (typeof document !== "undefined") {
+      trueDomCount.value = document.body.querySelectorAll('*').length;
+    }
+  }
+
+  // 3. Memory Churn tracking
+  if (typeof performance !== "undefined" && performance.memory) {
+    const currentMemory = performance.memory.usedJSHeapSize;
+    if (previousMemoryTotal > 0) {
+      if (currentMemory > previousMemoryTotal) {
+        // Normal allocation 
+        accumulatedChurn += (currentMemory - previousMemoryTotal);
+      } else {
+        // GC swept, memory went down — ignore the drop, we only track total allocated size
+      }
+    }
+    previousMemoryTotal = currentMemory;
+    // Keep it rolling per-render to show MB churned across last 120 samples
+    memoryChurnMb.value = (accumulatedChurn / 1024 / 1024).toFixed(2);
+  }
 });
 
 function computeTelemetryStats() {
@@ -144,7 +187,7 @@ function buildAuditPayload() {
     },
     domMetrics: {
       activeDataCards: stressNodes.value.length,
-      estimatedDomElements: stressNodes.value.length * 7 + 45,
+      trueDomElements: trueDomCount.value,
       tickerActive: tickerActive.value,
       currentFps,
     },
@@ -160,6 +203,8 @@ function buildAuditPayload() {
       domHydrationAvgMs: Number(stats.avgHydrate.toFixed(2)),
     },
     profiling: {
+      mainThreadCpuLoadPct: Number(cpuLoadPct.value),
+      memoryChurnMb: Number(memoryChurnMb.value),
       longTaskStallsCount: longTaskCount,
       maxLongTaskDurationMs: Number(maxLongTaskDurationMs.toFixed(2)),
       memory: mem,
@@ -385,15 +430,17 @@ const copyAuditMarkdown = action("copyAuditMarkdown", () => {
     `- **Timestamp**: \`${p.timestamp}\``,
     `- **Host URL**: \`${env.url}\``,
     `- **Hardware**: ${env.cores} CPU Cores | ~${env.deviceMemoryGb} GB RAM | Screen: ${env.screenResolution}`,
-    `- **DOM Workload**: ${dom.activeDataCards.toLocaleString()} cards (~${dom.estimatedDomElements.toLocaleString()} DOM elements)`,
-    `- **Live Frame Rate**: ${dom.fps} FPS (Ticker: ${dom.tickerActive ? "Active" : "Off"})`,
+    `- **DOM Workload**: ${dom.activeDataCards.toLocaleString()} virtual cards (🔥 **${dom.trueDomElements.toLocaleString()} true DOM elements**)`,
+    `- **Live Frame Rate**: ${dom.currentFps} FPS (Ticker: ${dom.tickerActive ? "Active" : "Off"})`,
     `\n**Latency Distribution (over ${r.samplesAnalyzed} samples)**:`,
     `- **Median (p50)**: \`${r.medianP50} ms\``,
     `- **95th percentile (p95)**: \`${r.percentileP95} ms\``,
     `- **99th percentile (p99)**: \`${r.percentileP99} ms\``,
     `- **Min / Max**: \`${r.min} ms\` / \`${r.max} ms\``,
     `- **Average**: \`${r.average} ms\` (Tree: \`${r.treeConstructionAvgMs} ms\` | Hydration: \`${r.domHydrationAvgMs} ms\`)`,
-    `\n**Browser Diagnostics**:`,
+    `\n**Advanced Hardware Diagnostics**:`,
+    `- **Main Thread CPU Load**: \`${prof.mainThreadCpuLoadPct}% CPU\` spent in framework`,
+    `- **Garbage Collection / Churn**: \`${prof.memoryChurnMb} MB/sec\` memory allocation rate`,
     `- **Main Thread Stalls (>50ms)**: ${prof.longTaskStallsCount} long tasks (Peak stall: \`${prof.maxLongTaskDurationMs} ms\`)`,
     prof.memory ? `- **JS Heap Used**: \`${prof.memory.usedJsHeapMb} MB\` / \`${prof.memory.totalJsHeapMb} MB\`` : `- **JS Heap**: N/A`,
   ].join("\n");
@@ -860,7 +907,6 @@ function renderAuditPanel() {
 function renderBenchmarkCard() {
   const nodes = stressNodes.value;
   const nodeCount = nodes.length;
-  const totalElements = nodeCount * 7 + 45; // Compound DOM nodes
 
   const latencyClass =
     lastRenderDurationMs < 16 ? "good" : lastRenderDurationMs < 45 ? "warn" : "bad";
@@ -892,11 +938,11 @@ function renderBenchmarkCard() {
     ui("div", { key: "bench-metrics-grid", class: "grid grid-4", style: "margin-bottom: 1.5rem;" }, [
       ui("div", { key: "metric-count", class: "metric-card" }, [
         ui("div", { key: "val-count", class: "metric-val" }, [nodeCount.toLocaleString()]),
-        ui("div", { key: "lbl-count", class: "metric-label" }, ["Data Cards"]),
+        ui("div", { key: "lbl-count", class: "metric-label" }, ["Virtual Data Cards"]),
       ]),
       ui("div", { key: "metric-elements", class: "metric-card" }, [
-        ui("div", { key: "val-elements", class: "metric-val" }, [totalElements.toLocaleString()]),
-        ui("div", { key: "lbl-elements", class: "metric-label" }, ["DOM Elements"]),
+        ui("div", { key: "val-elements", class: "metric-val" }, [trueDomCount.value.toLocaleString()]),
+        ui("div", { key: "lbl-elements", class: "metric-label" }, ["True DOM Elements"]),
       ]),
       ui("div", { key: "metric-latency", class: "metric-card" }, [
         ui("div", { key: "val-latency", class: `metric-val ${latencyClass}` }, [
@@ -909,6 +955,28 @@ function renderBenchmarkCard() {
           tickerActive.value ? `${currentFps} FPS` : "--"
         ]),
         ui("div", { key: "lbl-fps", class: "metric-label" }, ["Live Ticker Rate"]),
+      ]),
+    ]),
+    
+    // Advanced Hardware Telemetry Grid
+    ui("div", { key: "hw-metrics-grid", class: "grid grid-4", style: "margin-bottom: 1.5rem;" }, [
+      ui("div", { key: "hw-cpu", class: "metric-card" }, [
+        ui("div", { key: "hw-val-cpu", class: "metric-val", style: "color: #3b82f6" }, [`${cpuLoadPct.value}%`]),
+        ui("div", { key: "hw-lbl-cpu", class: "metric-label" }, ["Main Thread CPU Load"]),
+      ]),
+      ui("div", { key: "hw-mem", class: "metric-card" }, [
+        ui("div", { key: "hw-val-mem", class: "metric-val", style: "color: #a855f7" }, [`${memoryChurnMb.value} MB/s`]),
+        ui("div", { key: "hw-lbl-mem", class: "metric-label" }, ["Memory Churn / GC Rate"]),
+      ]),
+      ui("div", { key: "hw-stalls", class: "metric-card" }, [
+        ui("div", { key: "hw-val-stalls", class: longTaskCount > 0 ? "metric-val bad" : "metric-val good" }, [longTaskCount.toLocaleString()]),
+        ui("div", { key: "hw-lbl-stalls", class: "metric-label" }, ["Long Task Stalls (>50ms)"]),
+      ]),
+      ui("div", { key: "hw-heap", class: "metric-card" }, [
+        ui("div", { key: "hw-val-heap", class: "metric-val" }, [
+          typeof performance !== "undefined" && performance.memory ? `${(performance.memory.usedJSHeapSize / 1024 / 1024).toFixed(0)} MB` : "N/A"
+        ]),
+        ui("div", { key: "hw-lbl-heap", class: "metric-label" }, ["Active JS Heap Size"]),
       ]),
     ]),
 
