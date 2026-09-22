@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-22T10:43:48.675Z",
+  "timestamp": "2026-09-22T10:17:56.499Z",
   "environment": {
     "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
     "cores": 8,
@@ -10,31 +10,31 @@
   "framework": {
     "name": "fried.js",
     "mode": "in-place-dom-hydration",
-    "totalRenderCycles": 1613
+    "totalRenderCycles": 85
   },
   "domMetrics": {
     "activeDataCards": 5000,
     "estimatedDomElements": 35045,
     "tickerActive": false,
-    "currentFps": 3
+    "currentFps": 5
   },
   "renderLatencyMs": {
-    "samplesAnalyzed": 120,
-    "medianP50": 101.8,
-    "percentileP95": 262.5,
-    "percentileP99": 314,
-    "min": 81.7,
-    "max": 353.6,
-    "average": 113.92,
-    "treeConstructionAvgMs": 67.53,
-    "domHydrationAvgMs": 46.39
+    "samplesAnalyzed": 83,
+    "medianP50": 104.8,
+    "percentileP95": 156.2,
+    "percentileP99": 229,
+    "min": 1.8,
+    "max": 229,
+    "average": 109.7,
+    "treeConstructionAvgMs": 65.87,
+    "domHydrationAvgMs": 43.82
   },
   "profiling": {
-    "longTaskStallsCount": 381,
-    "maxLongTaskDurationMs": 354,
+    "longTaskStallsCount": 134,
+    "maxLongTaskDurationMs": 288,
     "memory": {
-      "usedJsHeapMb": 48.77,
-      "totalJsHeapMb": 110.41,
+      "usedJsHeapMb": 69.47,
+      "totalJsHeapMb": 119.55,
       "jsHeapLimitMb": 4192
     }
   }
