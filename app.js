@@ -1,4 +1,4 @@
-import { mount, state, action, ui, uid } from "./fried.js";
+import { mount, state, action, ui, uid, onRender } from "./fried.js";
 
 // --- State Definitions ---
 const count = state(0);
@@ -9,18 +9,139 @@ const todos = state([
 ]);
 const filter = state("all");
 const inspectKeysActive = state(false);
-const activeTab = state("showcase"); // "showcase" | "tests" | "benchmark"
+const activeTab = state("showcase"); // "showcase" | "benchmark" | "tests"
 const testSuiteResults = state(null);
 
 // --- Stress Test State & Telemetry ---
 const stressNodes = state([]);
 const tickerActive = state(false);
+const auditToast = state(null); // { type: 'success' | 'error', text: '' }
+
 let lastRenderDurationMs = 0;
 let totalRenderCycles = 0;
 let tickerTimerId = null;
 let lastFrameTimestamp = performance.now();
 let currentFps = 60;
 let frameCounter = 0;
+
+// Render sample buffer for telemetry percentiles
+const renderSamples = [];
+const MAX_SAMPLES = 120;
+let longTaskCount = 0;
+let maxLongTaskDurationMs = 0;
+
+// Listen for browser main thread long tasks (>50ms stalls)
+if (typeof PerformanceObserver !== "undefined") {
+  try {
+    const observer = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        longTaskCount++;
+        if (entry.duration > maxLongTaskDurationMs) {
+          maxLongTaskDurationMs = entry.duration;
+        }
+      }
+    });
+    observer.observe({ entryTypes: ["longtask"] });
+  } catch (_) {}
+}
+
+// Hook into fried.js runtime to profile each render cycle
+onRender(({ tTree, tHydrate, tTotal }) => {
+  renderSamples.push({ tTree, tHydrate, tTotal });
+  if (renderSamples.length > MAX_SAMPLES) {
+    renderSamples.shift();
+  }
+  lastRenderDurationMs = tTotal;
+});
+
+function computeTelemetryStats() {
+  if (renderSamples.length === 0) {
+    return {
+      sampleCount: 0,
+      min: 0,
+      max: 0,
+      avg: 0,
+      p50: 0,
+      p95: 0,
+      p99: 0,
+      avgTree: 0,
+      avgHydrate: 0,
+    };
+  }
+  const totals = renderSamples.map((s) => s.tTotal).sort((a, b) => a - b);
+  const trees = renderSamples.map((s) => s.tTree);
+  const hydrates = renderSamples.map((s) => s.tHydrate);
+
+  const min = totals[0];
+  const max = totals[totals.length - 1];
+  const avg = totals.reduce((a, b) => a + b, 0) / totals.length;
+  const p50 = totals[Math.floor(totals.length * 0.5)] || 0;
+  const p95 = totals[Math.floor(totals.length * 0.95)] || 0;
+  const p99 = totals[Math.floor(totals.length * 0.99)] || 0;
+  const avgTree = trees.reduce((a, b) => a + b, 0) / trees.length;
+  const avgHydrate = hydrates.reduce((a, b) => a + b, 0) / hydrates.length;
+
+  return {
+    sampleCount: renderSamples.length,
+    min,
+    max,
+    avg,
+    p50,
+    p95,
+    p99,
+    avgTree,
+    avgHydrate,
+  };
+}
+
+function buildAuditPayload() {
+  const stats = computeTelemetryStats();
+  const mem = (typeof performance !== "undefined" && performance.memory)
+    ? {
+        usedJsHeapMb: Number((performance.memory.usedJSHeapSize / 1024 / 1024).toFixed(2)),
+        totalJsHeapMb: Number((performance.memory.totalJSHeapSize / 1024 / 1024).toFixed(2)),
+        jsHeapLimitMb: Number((performance.memory.jsHeapSizeLimit / 1024 / 1024).toFixed(2)),
+      }
+    : null;
+
+  return {
+    timestamp: new Date().toISOString(),
+    environment: {
+      userAgent: navigator.userAgent,
+      cores: navigator.hardwareConcurrency || "unknown",
+      deviceMemoryGb: navigator.deviceMemory || "unknown",
+      url: window.location.href,
+      screenResolution: `${window.screen.width}x${window.screen.height}`,
+    },
+    framework: {
+      name: "fried.js",
+      mode: "in-place-dom-hydration",
+      totalRenderCycles,
+    },
+    domMetrics: {
+      activeDataCards: stressNodes.value.length,
+      estimatedDomElements: stressNodes.value.length * 7 + 45,
+      tickerActive: tickerActive.value,
+      currentFps,
+    },
+    renderLatencyMs: {
+      samplesAnalyzed: stats.sampleCount,
+      medianP50: Number(stats.p50.toFixed(2)),
+      percentileP95: Number(stats.p95.toFixed(2)),
+      percentileP99: Number(stats.p99.toFixed(2)),
+      min: Number(stats.min.toFixed(2)),
+      max: Number(stats.max.toFixed(2)),
+      average: Number(stats.avg.toFixed(2)),
+      treeConstructionAvgMs: Number(stats.avgTree.toFixed(2)),
+      domHydrationAvgMs: Number(stats.avgHydrate.toFixed(2)),
+    },
+    profiling: {
+      longTaskStallsCount: longTaskCount,
+      maxLongTaskDurationMs: Number(maxLongTaskDurationMs.toFixed(2)),
+      memory: mem,
+    },
+  };
+}
 
 // --- Named Actions ---
 const increment = action("increment", () => {
@@ -171,6 +292,85 @@ const toggleChaosTicker = action("toggleChaosTicker", () => {
   }
 });
 
+// --- Audit & Diagnostics Actions ---
+const sendAuditToServer = action("sendAuditToServer", async () => {
+  const payload = buildAuditPayload();
+  try {
+    const res = await fetch("/api/telemetry", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload, null, 2),
+    });
+    const result = await res.json();
+    if (result.ok) {
+      auditToast.value = {
+        type: "success",
+        text: `✅ Saved report to ${result.filename}! Tell your agent: "Please audit ${result.filename}".`,
+      };
+    } else {
+      auditToast.value = { type: "error", text: `Failed to save: ${result.error}` };
+    }
+  } catch (err) {
+    auditToast.value = { type: "error", text: `Server error: ${err.message}` };
+  }
+});
+
+const copyAuditMarkdown = action("copyAuditMarkdown", () => {
+  const p = buildAuditPayload();
+  const r = p.renderLatencyMs;
+  const env = p.environment;
+  const dom = p.domMetrics;
+  const prof = p.profiling;
+
+  const markdown = [
+    `### 📊 Fried.js Performance Audit Report`,
+    `- **Timestamp**: \`${p.timestamp}\``,
+    `- **Host URL**: \`${env.url}\``,
+    `- **Hardware**: ${env.cores} CPU Cores | ~${env.deviceMemoryGb} GB RAM | Screen: ${env.screenResolution}`,
+    `- **DOM Workload**: ${dom.activeDataCards.toLocaleString()} cards (~${dom.estimatedDomElements.toLocaleString()} DOM elements)`,
+    `- **Live Frame Rate**: ${dom.fps} FPS (Ticker: ${dom.tickerActive ? "Active" : "Off"})`,
+    `\n**Latency Distribution (over ${r.samplesAnalyzed} samples)**:`,
+    `- **Median (p50)**: \`${r.medianP50} ms\``,
+    `- **95th percentile (p95)**: \`${r.percentileP95} ms\``,
+    `- **99th percentile (p99)**: \`${r.percentileP99} ms\``,
+    `- **Min / Max**: \`${r.min} ms\` / \`${r.max} ms\``,
+    `- **Average**: \`${r.average} ms\` (Tree: \`${r.treeConstructionAvgMs} ms\` | Hydration: \`${r.domHydrationAvgMs} ms\`)`,
+    `\n**Browser Diagnostics**:`,
+    `- **Main Thread Stalls (>50ms)**: ${prof.longTaskStallsCount} long tasks (Peak stall: \`${prof.maxLongTaskDurationMs} ms\`)`,
+    prof.memory ? `- **JS Heap Used**: \`${prof.memory.usedJsHeapMb} MB\` / \`${prof.memory.totalJsHeapMb} MB\`` : `- **JS Heap**: N/A`,
+  ].join("\n");
+
+  navigator.clipboard.writeText(markdown).then(() => {
+    auditToast.value = {
+      type: "success",
+      text: "📋 Copied Markdown audit report to clipboard! You can paste it directly into chat.",
+    };
+  });
+});
+
+const downloadAuditJson = action("downloadAuditJson", () => {
+  const payload = buildAuditPayload();
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `friedjs-telemetry-${Date.now()}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  auditToast.value = { type: "success", text: "💾 Downloaded telemetry JSON file." };
+});
+
+const resetAuditSamples = action("resetAuditSamples", () => {
+  renderSamples.length = 0;
+  longTaskCount = 0;
+  maxLongTaskDurationMs = 0;
+  auditToast.value = { type: "success", text: "🔄 Telemetry samples buffer reset." };
+});
+
+const dismissToast = action("dismissToast", () => {
+  auditToast.value = null;
+});
+
 // --- In-Browser Diagnostic Test Suite ---
 const runBrowserTests = action("runBrowserTests", () => {
   const results = [];
@@ -296,7 +496,7 @@ function renderHeader() {
       ui("h1", { key: "app-title" }, ["Framework Tester & Playground"]),
     ]),
     ui("p", { key: "app-tagline", class: "tagline" }, [
-      "Zero-build ES module runtime with dumb reactivity and AST-patchable keys."
+      "Zero-build ES module runtime with in-place DOM hydration and AST-patchable keys."
     ]),
     ui("div", { key: "nav-controls", class: "button-row" }, [
       ui(
@@ -351,7 +551,7 @@ function renderCounterCard() {
       ui("span", { key: "counter-badge", class: "badge badge-blue" }, ["state() & action()"]),
     ]),
     ui("p", { key: "counter-desc", style: "color: var(--text-muted); font-size: 0.9rem;" }, [
-      "Tests state box updates and named action triggers with automatic re-rendering:"
+      "Tests state box updates and named action triggers with in-place DOM reconciliation:"
     ]),
     ui("div", { key: "counter-number", class: "counter-display" }, [count.value]),
     ui("div", { key: "counter-buttons", class: "button-row", style: "justify-content: center;" }, [
@@ -496,8 +696,8 @@ function renderArchitectureCard() {
           "Standard ES module loaded directly in the browser."
         ]),
         ui("li", { key: "arch-item-2" }, [
-          ui("strong", {}, ["Dumb Full Re-render: "]),
-          "Any state change or action execution clears root and re-runs the render tree. No virtual-DOM diffing bugs."
+          ui("strong", {}, ["In-Place Hydration: "]),
+          "Preserves existing DOM nodes and synchronizes attributes/text in place using dataset.friedKey."
         ]),
         ui("li", { key: "arch-item-3" }, [
           ui("strong", {}, ["Named Actions: "]),
@@ -516,6 +716,86 @@ function renderArchitectureCard() {
         " labels generated on every single node of this page!"
       ]),
     ]),
+  ]);
+}
+
+function renderAuditPanel() {
+  const stats = computeTelemetryStats();
+  const mem = (typeof performance !== "undefined" && performance.memory)
+    ? {
+        used: (performance.memory.usedJSHeapSize / 1024 / 1024).toFixed(1),
+        total: (performance.memory.totalJSHeapSize / 1024 / 1024).toFixed(1),
+      }
+    : null;
+
+  return ui("div", { key: "audit-panel-card", class: "audit-card" }, [
+    ui("div", { key: "audit-card-hdr", class: "card-header", style: "margin-bottom: 0.5rem;" }, [
+      ui("span", { key: "audit-card-title", class: "card-title" }, ["📊 Real-Time Telemetry & Agent Audit"]),
+      ui("span", { key: "audit-samples-count", class: "badge badge-blue" }, [`${stats.sampleCount} Samples`]),
+    ]),
+    ui("p", { key: "audit-card-desc", style: "color: var(--text-muted); font-size: 0.85rem;" }, [
+      "Hardware profiles, percentile latency distributions, and frame stall metrics ready to audit or send to your AI assistant:"
+    ]),
+
+    // Metric Pills Row
+    ui("div", { key: "audit-pills-row", class: "audit-metrics-row" }, [
+      ui("div", { key: "pill-p50", class: "audit-pill" }, [
+        ui("div", { key: "val-p50", class: "audit-pill-val" }, [`${stats.p50.toFixed(1)}ms`]),
+        ui("div", { key: "lbl-p50", class: "audit-pill-lbl" }, ["Median (p50)"]),
+      ]),
+      ui("div", { key: "pill-p95", class: "audit-pill" }, [
+        ui("div", { key: "val-p95", class: `audit-pill-val ${stats.p95 > 50 ? "bad" : stats.p95 > 25 ? "warn" : "good"}` }, [
+          `${stats.p95.toFixed(1)}ms`
+        ]),
+        ui("div", { key: "lbl-p95", class: "audit-pill-lbl" }, ["p95 Spike"]),
+      ]),
+      ui("div", { key: "pill-p99", class: "audit-pill" }, [
+        ui("div", { key: "val-p99", class: "audit-pill-val" }, [`${stats.p99.toFixed(1)}ms`]),
+        ui("div", { key: "lbl-p99", class: "audit-pill-lbl" }, ["p99 Peak"]),
+      ]),
+      ui("div", { key: "pill-split", class: "audit-pill" }, [
+        ui("div", { key: "val-split", class: "audit-pill-val", style: "font-size: 0.9rem;" }, [
+          `${stats.avgTree.toFixed(0)}ms / ${stats.avgHydrate.toFixed(0)}ms`
+        ]),
+        ui("div", { key: "lbl-split", class: "audit-pill-lbl" }, ["Tree / Hydrate"]),
+      ]),
+      ui("div", { key: "pill-stalls", class: "audit-pill" }, [
+        ui("div", { key: "val-stalls", class: `audit-pill-val ${longTaskCount > 0 ? "warn" : "good"}` }, [
+          `${longTaskCount}`
+        ]),
+        ui("div", { key: "lbl-stalls", class: "audit-pill-lbl" }, ["Stalls (>50ms)"]),
+      ]),
+      ui("div", { key: "pill-mem", class: "audit-pill" }, [
+        ui("div", { key: "val-mem", class: "audit-pill-val", style: "font-size: 0.95rem;" }, [
+          mem ? `${mem.used} MB` : "N/A"
+        ]),
+        ui("div", { key: "lbl-mem", class: "audit-pill-lbl" }, ["JS Heap"]),
+      ]),
+    ]),
+
+    // Action Buttons
+    ui("div", { key: "audit-btns-row", class: "button-row" }, [
+      ui("button", { key: "btn-send-server", class: "btn btn-primary", onclick: sendAuditToServer }, [
+        "📤 Save Audit to Workspace (for Agent)"
+      ]),
+      ui("button", { key: "btn-copy-md", class: "btn", onclick: copyAuditMarkdown }, [
+        "📋 Copy Markdown for Chat"
+      ]),
+      ui("button", { key: "btn-dl-json", class: "btn", onclick: downloadAuditJson }, [
+        "💾 Download JSON"
+      ]),
+      ui("button", { key: "btn-reset-telemetry", class: "btn btn-danger", onclick: resetAuditSamples }, [
+        "🔄 Reset Samples"
+      ]),
+    ]),
+
+    // Toast feedback notification
+    auditToast.value
+      ? ui("div", { key: "audit-toast", class: "toast-banner toast-success" }, [
+          ui("span", { key: "toast-msg" }, [auditToast.value.text]),
+          ui("button", { key: "toast-close", class: "btn btn-sm", onclick: dismissToast, style: "padding: 0.1rem 0.4rem;" }, ["✕"]),
+        ])
+      : null,
   ]);
 }
 
@@ -593,6 +873,9 @@ function renderBenchmarkCard() {
       ),
       ui("button", { key: "btn-clear-nodes", class: "btn btn-danger", onclick: clearStressNodes, disabled: nodeCount === 0 }, ["Clear All"]),
     ]),
+
+    // Audit Panel
+    renderAuditPanel(),
 
     // Rich Node Grid View
     nodeCount === 0
@@ -705,7 +988,6 @@ function renderTestSuiteCard() {
 }
 
 function renderApp() {
-  const t0 = performance.now();
   totalRenderCycles++;
 
   let mainContent;
@@ -723,7 +1005,7 @@ function renderApp() {
     mainContent = ui("div", { key: "tests-view" }, [renderTestSuiteCard()]);
   }
 
-  const appEl = ui("div", { key: "main-app-container", class: "container" }, [
+  return ui("div", { key: "main-app-container", class: "container" }, [
     renderHeader(),
     mainContent,
     ui("footer", { key: "app-footer" }, [
@@ -732,9 +1014,6 @@ function renderApp() {
       ]),
     ]),
   ]);
-
-  lastRenderDurationMs = performance.now() - t0;
-  return appEl;
 }
 
 // Mount the app into #app container

@@ -18,6 +18,27 @@ const server = http.createServer((req, res) => {
   let reqPath = req.url.split("?")[0];
   if (reqPath === "/") reqPath = "/index.html";
 
+  if (req.method === "POST" && reqPath === "/api/telemetry") {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      try {
+        const data = JSON.parse(body);
+        const auditDir = path.join(__dirname, "audit-logs");
+        if (!fs.existsSync(auditDir)) fs.mkdirSync(auditDir, { recursive: true });
+        const filename = `audit-${Date.now()}.json`;
+        fs.writeFileSync(path.join(auditDir, filename), JSON.stringify(data, null, 2));
+        fs.writeFileSync(path.join(auditDir, "latest.json"), JSON.stringify(data, null, 2));
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, filename: `audit-logs/${filename}` }));
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: err.message }));
+      }
+    });
+    return;
+  }
+
   const filePath = path.join(DIST_DIR, reqPath);
   const ext = path.extname(filePath);
   const contentType = MIME_TYPES[ext] || "text/plain";

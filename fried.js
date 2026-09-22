@@ -29,18 +29,41 @@ function scheduleRender() {
   });
 }
 
+let renderHooks = [];
+
+/** Registers a callback hook invoked after every render cycle with timing metrics */
+export function onRender(fn) {
+  renderHooks.push(fn);
+  return () => {
+    renderHooks = renderHooks.filter((h) => h !== fn);
+  };
+}
+
 /** Synchronous flush / render */
 export function render() {
   if (!root || !renderFn) return;
+  const t0 = typeof performance !== "undefined" ? performance.now() : 0;
   const nextNode = renderFn();
+  const tTree = (typeof performance !== "undefined" ? performance.now() : 0) - t0;
+
   if (!nextNode) {
     root.innerHTML = "";
     return;
   }
+
+  const tHydrate0 = typeof performance !== "undefined" ? performance.now() : 0;
   if (!root.firstElementChild) {
     root.appendChild(nextNode);
   } else {
     hydrate(root.firstElementChild, nextNode);
+  }
+  const tHydrate = (typeof performance !== "undefined" ? performance.now() : 0) - tHydrate0;
+  const tTotal = (typeof performance !== "undefined" ? performance.now() : 0) - t0;
+
+  for (const hook of renderHooks) {
+    try {
+      hook({ tTree, tHydrate, tTotal, timestamp: Date.now() });
+    } catch (_) {}
   }
 }
 
