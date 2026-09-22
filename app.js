@@ -1,6 +1,20 @@
-import { mount, state, action, ui, uid, onRender, sliceRender } from "./fried.js";
+import { mount, state, action, ui, uid, onRender, sliceRender, css, cssVar } from "./fried.js";
 
-// --- State Definitions ---
+// -- App-level styles defined in JS, injected once as a <style> tag via css()
+// These live alongside component logic — no separate CSS file needed for component styles.
+const S = css({
+  badge:        "display:inline-block;padding:2px 7px;border-radius:4px;font-size:0.72rem;font-weight:700;letter-spacing:.04em",
+  badgeGreen:   "background:#22c55e20;color:#22c55e",
+  badgeYellow:  "background:#f59e0b20;color:#d97706",
+  badgeRed:     "background:#ef444420;color:#ef4444",
+  nodeHeader:   "display:flex;justify-content:space-between;align-items:center;margin-bottom:.4rem",
+  nodeTitle:    "font-size:.78rem;font-weight:600;font-family:var(--font-mono);color:var(--text-muted)",
+  nodeBody:     "font-size:.72rem;color:var(--text-muted);display:flex;flex-direction:column;gap:.2rem",
+  meterTrack:   "height:5px;border-radius:3px;background:var(--border);margin-top:.4rem;overflow:hidden",
+  meterBar:     "height:100%;background:var(--accent);border-radius:3px;transition:width .15s",
+  meterBarHigh: "height:100%;background:#ef4444;border-radius:3px;transition:width .15s",
+});
+
 const count = state(0);
 const todos = state([
   { id: uid(), text: "Explore fried.js minimal runtime", done: true },
@@ -957,23 +971,28 @@ function renderBenchmarkCard() {
           "div",
           { key: "stress-nodes-grid", class: "stress-grid" },
           nodes.map((n) => {
-            const statusBadgeClass =
-              n.status === "HEALTHY" ? "badge badge-green" : n.status === "WARNING" ? "badge" : "badge badge-red";
+            // Badge class composed from S map — no string concat per render
+            const badgeCls = `${S.badge} ${n.status === "HEALTHY" ? S.badgeGreen : n.status === "WARNING" ? S.badgeYellow : S.badgeRed}`;
+
+            // Set CSS variable for this node's load bar width — zero re-render cost.
+            // The browser animates the transition via CSS; JS just writes one custom property.
+            cssVar(`--load-${n.id}`, `${n.load}%`);
 
             return ui("div", { key: `stress-card-${n.id}`, class: "rich-node" }, [
-              ui("div", { key: `node-top-${n.id}`, class: "rich-node-header" }, [
-                ui("span", { key: `node-title-${n.id}`, class: "rich-node-title" }, [n.title]),
-                ui("span", { key: `node-status-${n.id}`, class: statusBadgeClass }, [n.status]),
+              ui("div", { key: `node-top-${n.id}`, class: S.nodeHeader }, [
+                ui("span", { key: `node-title-${n.id}`, class: S.nodeTitle }, [n.title]),
+                ui("span", { key: `node-status-${n.id}`, class: badgeCls }, [n.status]),
               ]),
-              ui("div", { key: `node-body-${n.id}`, class: "rich-node-body" }, [
+              ui("div", { key: `node-body-${n.id}`, class: S.nodeBody }, [
                 ui("span", { key: `node-hash-${n.id}` }, [`Hash: ${n.hash}`]),
                 ui("span", { key: `node-metrics-${n.id}` }, [`Latency: ${n.latency} • Mem: ${n.memory}`]),
                 ui("span", { key: `node-time-${n.id}` }, [`Updated: ${n.timeStr}`]),
-                ui("div", { key: `node-track-${n.id}`, class: "meter-track" }, [
+                ui("div", { key: `node-track-${n.id}`, class: S.meterTrack }, [
                   ui("div", {
                     key: `node-bar-${n.id}`,
-                    class: n.load > 75 ? "meter-bar high" : "meter-bar",
-                    style: `width: ${n.load}%;`,
+                    // Class picks high/normal bar style; width is driven by CSS var (no style= churn)
+                    class: n.load > 75 ? S.meterBarHigh : S.meterBar,
+                    style: `width:var(--load-${n.id},0%)`,
                   }),
                 ]),
               ]),
@@ -982,7 +1001,7 @@ function renderBenchmarkCard() {
                 {
                   key: `node-mutate-btn-${n.id}`,
                   class: "btn btn-sm",
-                  style: "margin-top: 0.3rem; align-self: flex-end;",
+                  style: "margin-top:0.3rem;align-self:flex-end",
                   onclick: () => mutateSingleNode(n.id),
                 },
                 ["Mutate Single"]

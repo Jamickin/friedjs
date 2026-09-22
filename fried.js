@@ -1,303 +1,223 @@
-// fried.js -- a minimal runtime for apps meant to be written and edited by
-// an AI agent. There is no new syntax here: this is real, ordinary
-// JavaScript, loaded as an ES module with no build step.
-//
-// Hydration & Fast-Path In-Place Reconciliation (Vue/Svelte-inspired):
-// Uses fast-path 1-to-1 diffing and pure-JS prop tracking to avoid
-// slow DOM reflection overhead. Retains existing DOM nodes, batches
-// renders via microtasks, and stays tiny (<150 lines).
+// fried.js — fast, small, AI-first reactive UI runtime.
+// Real JS, ES modules, no build step, no special syntax.
+// API: mount state action ui uid css cssVar onRender nextTick sliceRender render
 
-let root = null;
-let renderFn = null;
-let pendingRender = false;
-let renderHooks = [];
+const perf = typeof performance !== "undefined" ? performance : null;
+const t = () => perf?.now() ?? 0;
 
-export function mount(rootRenderFn, el) {
-  renderFn = rootRenderFn;
-  root = el;
-  render();
-}
+let root, renderFn, pendingRender = false, renderHooks = [];
 
-/** Registers a callback hook invoked after every render cycle with timing metrics */
-export function onRender(fn) {
-  renderHooks.push(fn);
-  return () => {
-    renderHooks = renderHooks.filter((h) => h !== fn);
-  };
-}
+export function mount(fn, el)  { renderFn = fn; root = el; render(); }
+export function onRender(fn)   { renderHooks.push(fn); return () => { renderHooks = renderHooks.filter(h => h !== fn); }; }
+export function nextTick(fn)   { return fn ? queueMicrotask(fn) : new Promise(r => queueMicrotask(r)); }
+export function uid()          { return Math.random().toString(36).slice(2, 10); }
 
-/** Schedules a microtask render to batch synchronous state mutations (Vue-style) */
 function scheduleRender() {
   if (pendingRender) return;
   pendingRender = true;
-  queueMicrotask(() => {
-    pendingRender = false;
-    render();
-  });
+  queueMicrotask(() => { pendingRender = false; render(); });
 }
 
-/** Synchronous flush / render */
 export function render() {
   if (!root || !renderFn) return;
-  const t0 = typeof performance !== "undefined" ? performance.now() : 0;
-  const nextNode = renderFn();
-  const tTree = (typeof performance !== "undefined" ? performance.now() : 0) - t0;
-
-  if (!nextNode) {
-    root.innerHTML = "";
-    return;
-  }
-
-  const tHydrate0 = typeof performance !== "undefined" ? performance.now() : 0;
-  if (!root.firstElementChild) {
-    root.appendChild(nextNode);
-  } else {
-    hydrate(root.firstElementChild, nextNode);
-  }
-  const tHydrate = (typeof performance !== "undefined" ? performance.now() : 0) - tHydrate0;
-  const tTotal = (typeof performance !== "undefined" ? performance.now() : 0) - t0;
-
-  for (const hook of renderHooks) {
-    try {
-      hook({ tTree, tHydrate, tTotal, timestamp: Date.now() });
-    } catch (_) {}
-  }
+  const t0 = t(), next = renderFn(), tTree = t() - t0;
+  if (!next) { root.innerHTML = ""; return; }
+  const t1 = t();
+  root.firstElementChild ? hydrate(root.firstElementChild, next) : root.appendChild(next);
+  const tHydrate = t() - t1;
+  for (const h of renderHooks) { try { h({ tTree, tHydrate, tTotal: tTree + tHydrate, timestamp: Date.now() }); } catch(_) {} }
 }
 
-/** Vue-style nextTick for awaiting DOM updates */
-export function nextTick(fn) {
-  return fn ? queueMicrotask(fn) : new Promise((res) => queueMicrotask(res));
+// -- CSS Engine ----------------------------------------------------------
+// css(rules) injects a <style> tag once, dedupes by content, returns class map.
+// cssVar(name, val?) gets/sets CSS custom properties — zero re-render cost.
+
+let _sheet = null;
+const _cssCache = new Map(); // decl string → generated class name
+
+function ensureSheet() {
+  if (_sheet) return;
+  const el = document.createElement("style");
+  el.id = "fried-css";
+  document.head.appendChild(el);
+  _sheet = el.sheet;
 }
 
-/**
- * Time-sliced list renderer. Breaks large item arrays into chunks and
- * renders each chunk inside a requestIdleCallback (or rAF fallback),
- * keeping the main thread free between chunks.
- *
- * Usage: await sliceRender(items, 200, (chunk) => { myState.value = chunk; });
- *
- * @param {Array}    items       Full item list to render progressively
- * @param {number}   chunkSize   Items per frame budget (default 200)
- * @param {Function} onChunk     Called with the growing committed slice each frame
- * @param {Function} [onDone]    Optional callback when all chunks committed
- */
+export function css(rules) {
+  ensureSheet();
+  const out = {};
+  for (const name in rules) {
+    const decl = rules[name];
+    let cls = _cssCache.get(decl);
+    if (!cls) {
+      cls = "f" + _cssCache.size.toString(36);
+      _cssCache.set(decl, cls);
+      _sheet.insertRule(`.${cls}{${decl}}`, _sheet.cssRules.length);
+    }
+    out[name] = cls;
+  }
+  return out;
+}
+
+export function cssVar(name, value) {
+  if (value === undefined) return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  document.documentElement.style.setProperty(name, String(value));
+}
+
+// -- Time-sliced rendering -----------------------------------------------
+// sliceRender(items, chunkSize, onChunk, onDone)
+// Shows first chunk synchronously, fills rest in idle callbacks.
+
+const ric = typeof requestIdleCallback !== "undefined"
+  ? fn => requestIdleCallback(fn, { timeout: 100 })
+  : fn => requestAnimationFrame(() => fn({ timeRemaining: () => 16 }));
+
 export function sliceRender(items, chunkSize = 200, onChunk, onDone) {
-  // requestIdleCallback with 16ms deadline fallback
-  const ric = typeof requestIdleCallback !== "undefined"
-    ? (fn) => requestIdleCallback(fn, { timeout: 100 })
-    : (fn) => requestAnimationFrame(() => fn({ timeRemaining: () => 16 }));
+  let committed = Math.min(chunkSize, items.length);
+  onChunk(items.slice(0, committed));
+  if (committed >= items.length) { onDone?.(); return; }
 
-  let committed = 0;
-
-  function scheduleChunk() {
-    ric((deadline) => {
-      // Fill as many chunks as we have idle time for
+  (function next() {
+    ric(deadline => {
       while (committed < items.length && deadline.timeRemaining() > 1) {
         committed = Math.min(committed + chunkSize, items.length);
         onChunk(items.slice(0, committed));
       }
-      if (committed < items.length) {
-        scheduleChunk();
-      } else {
-        onDone?.();
-      }
+      committed < items.length ? next() : onDone?.();
     });
-  }
-
-  // Render first chunk synchronously so UI appears instantly
-  committed = Math.min(chunkSize, items.length);
-  onChunk(items.slice(0, committed));
-  if (committed < items.length) scheduleChunk();
+  })();
 }
 
-/** In-place DOM reconciliation / hydration */
-function hydrate(oldNode, newNode) {
-  // 1. Text node reconciliation
-  if (oldNode.nodeType === 3 && newNode.nodeType === 3) {
-    if (oldNode.nodeValue !== newNode.nodeValue) {
-      oldNode.nodeValue = newNode.nodeValue;
-    }
-    return oldNode;
+// -- DOM Reconciliation --------------------------------------------------
+
+function hydrate(o, n) {
+  if (o.nodeType === 3 && n.nodeType === 3) {
+    if (o.nodeValue !== n.nodeValue) o.nodeValue = n.nodeValue;
+    return o;
   }
-
-  // 2. Tag name or node type mismatch -> replace node
-  if (oldNode.nodeType !== newNode.nodeType || oldNode.tagName !== newNode.tagName) {
-    oldNode.replaceWith(newNode);
-    return newNode;
+  if (o.nodeType !== n.nodeType || o.tagName !== n.tagName) {
+    o.replaceWith(n); return n;
   }
-
-  // 3. Fast-path attribute & property reconciliation via cached JS props
-  hydrateAttributes(oldNode, newNode);
-
-  // 4. Hydrate child nodes
-  hydrateChildren(oldNode, newNode);
-
-  return oldNode;
+  hydrateAttrs(o, n);
+  hydrateChildren(o, n);
+  return o;
 }
 
-function hydrateAttributes(oldEl, newEl) {
-  const oldProps = oldEl._friedProps || {};
-  const newProps = newEl._friedProps || {};
+function hydrateAttrs(o, n) {
+  const op = o._friedProps || {}, np = n._friedProps || {};
+  const seen = new Set();
 
-  // Remove deleted attributes / properties
-  for (const k in oldProps) {
-    if (!(k in newProps)) {
-      if (k === "class") oldEl.className = "";
-      else if (k === "checked") oldEl.checked = false;
-      else if (!k.startsWith("on") && k !== "key") oldEl.removeAttribute(k);
-    }
+  for (const k in np) {
+    seen.add(k);
+    const nv = np[k];
+    if (op[k] === nv) continue;           // unchanged — skip
+    if      (k === "class")   o.className = nv || "";
+    else if (k === "checked") o.checked = !!nv;
+    else if (k === "value")   { if (o !== document.activeElement) o.value = nv; }
+    else if (k === "key")     {} // never set as DOM attr
+    else if (k.startsWith("on")) {}        // handlers forwarded below
+    else if (nv === false || nv == null)   o.removeAttribute(k);
+    else                                   o.setAttribute(k, nv);
   }
 
-  // Set updated or added attributes / properties
-  for (const k in newProps) {
-    const nextVal = newProps[k];
-    if (oldProps[k] === nextVal) continue;
-
-    if (k === "class") {
-      oldEl.className = nextVal || "";
-    } else if (k === "checked") {
-      oldEl.checked = !!nextVal;
-    } else if (k === "value") {
-      if (oldEl !== (typeof document !== "undefined" && document.activeElement)) {
-        oldEl.value = nextVal;
-      }
-    } else if (k.startsWith("on")) {
-      // Event handler closure updated below
-    } else if (k === "key") {
-      // Never set key as a DOM attribute
-    } else if (nextVal === false || nextVal == null) {
-      // Boolean prop became false/null → remove the attribute (fixes disabled, hidden, etc.)
-      oldEl.removeAttribute(k);
-    } else {
-      oldEl.setAttribute(k, nextVal);
-    }
+  // Remove props no longer in new render
+  for (const k in op) {
+    if (seen.has(k)) continue;
+    if      (k === "class")              o.className = "";
+    else if (k === "checked")            o.checked = false;
+    else if (!k.startsWith("on") && k !== "key") o.removeAttribute(k);
   }
 
-  // Forward event handlers to latest closure
-  if (newEl._friedHandlers) {
-    oldEl._friedHandlers = Object.assign(oldEl._friedHandlers || {}, newEl._friedHandlers);
-  }
-  oldEl._friedProps = newProps;
+  if (n._friedHandlers) o._friedHandlers = Object.assign(o._friedHandlers || {}, n._friedHandlers);
+  o._friedProps = np;
 }
 
-function hydrateChildren(oldParent, newParent) {
-  const oldNodes = oldParent.childNodes;
-  const newNodes = newParent.childNodes;
-  const oldLen = oldNodes.length;
-  const newLen = newNodes.length;
+function hydrateChildren(op, np) {
+  const oc = op.childNodes, nc = np.childNodes;
+  const ol = oc.length, nl = nc.length, cl = Math.min(ol, nl);
 
-  // Fast-Path: Check if children are in the exact same sequence (covers 99% of re-renders)
-  const commonLen = Math.min(oldLen, newLen);
-  let isIdenticalSequence = true;
-
-  for (let i = 0; i < commonLen; i++) {
-    const o = oldNodes[i];
-    const n = newNodes[i];
-    if (o._friedKey !== n._friedKey || o.nodeType !== n.nodeType || o.tagName !== n.tagName) {
-      isIdenticalSequence = false;
-      break;
+  // Fast-path: identical key sequence — 1-to-1 in-place diff
+  let seq = true;
+  for (let i = 0; i < cl; i++) {
+    if (oc[i]._friedKey !== nc[i]._friedKey || oc[i].nodeType !== nc[i].nodeType || oc[i].tagName !== nc[i].tagName) {
+      seq = false; break;
     }
   }
-
-  if (isIdenticalSequence && oldLen === newLen) {
-    // ⚡ Fast path: In-place 1-to-1 diff without Map allocation or insertBefore
-    for (let i = 0; i < oldLen; i++) {
-      hydrate(oldNodes[i], newNodes[i]);
-    }
+  if (seq && ol === nl) {
+    for (let i = 0; i < ol; i++) hydrate(oc[i], nc[i]);
     return;
   }
 
-  // Fallback: Keyed Map reconciliation for insertions, deletions, and reordering
-  const keyMap = new Map();
-  for (let i = 0; i < oldLen; i++) {
-    const key = oldNodes[i]._friedKey;
-    if (key) keyMap.set(key, oldNodes[i]);
-  }
+  // Keyed fallback: Map reconciliation for insertions, deletions, reorders
+  const km = new Map();
+  for (let i = 0; i < ol; i++) { const k = oc[i]._friedKey; if (k) km.set(k, oc[i]); }
 
-  for (let i = 0; i < newLen; i++) {
-    const newChild = newNodes[i];
-    const key = newChild._friedKey;
-    const oldChild = key ? keyMap.get(key) : oldNodes[i];
-
-    if (oldChild && oldChild.parentNode === oldParent) {
-      if (key) keyMap.delete(key);
-      const currentAtPos = oldParent.childNodes[i];
-      if (currentAtPos !== oldChild) {
-        oldParent.insertBefore(oldChild, currentAtPos || null);
-      }
-      hydrate(oldChild, newChild);
+  for (let i = 0; i < nl; i++) {
+    const nc_i = nc[i], k = nc_i._friedKey;
+    const match = k ? km.get(k) : oc[i];
+    if (match?.parentNode === op) {
+      if (k) km.delete(k);
+      if (op.childNodes[i] !== match) op.insertBefore(match, op.childNodes[i] || null);
+      hydrate(match, nc_i);
     } else {
-      const currentAtPos = oldParent.childNodes[i];
-      oldParent.insertBefore(newChild, currentAtPos || null);
+      op.insertBefore(nc_i, op.childNodes[i] || null);
     }
   }
-
-  // Remove excess old children
-  while (oldParent.childNodes.length > newLen) {
-    oldParent.removeChild(oldParent.lastChild);
-  }
+  while (op.childNodes.length > nl) op.removeChild(op.lastChild);
 }
 
-/** A reactive box. Reassigning `.value` triggers a batched re-render. */
+// -- Reactive Primitives -------------------------------------------------
+
 export function state(initial) {
   let v = initial;
   return {
-    get value() {
-      return v;
-    },
-    set value(next) {
-      if (v === next) return;
-      v = next;
-      scheduleRender();
-    },
+    get value() { return v; },
+    set value(next) { if (v === next) return; v = next; scheduleRender(); },
   };
 }
 
-/** Wraps a function as a named action */
 export function action(name, fn) {
-  const wrapped = (...args) => {
-    const result = fn(...args);
-    scheduleRender();
-    return result;
-  };
-  wrapped.friedActionName = name;
-  return wrapped;
+  const w = (...args) => { const r = fn(...args); scheduleRender(); return r; };
+  w.friedActionName = name;
+  return w;
 }
 
-/**
- * Hyperscript-style element builder: ui(tag, props, children) -> a real
- * DOM element with event delegation and data-fried-key for AST & hydration.
- */
+// -- Element Builder -----------------------------------------------------
+// ui(tag, props, children) → real DOM element.
+// Props are cached as _friedProps for zero-reflection diffing.
+// Event handlers are stored in _friedHandlers for closure-forwarding.
+
 export function ui(tag, props = {}, children = []) {
   const el = document.createElement(tag);
   el._friedProps = props;
   el._friedKey = props.key;
 
-  for (const [k, v] of Object.entries(props)) {
-    if (k === "key") {
-      el.dataset.friedKey = v;
-    } else if (k.startsWith("on") && typeof v === "function") {
-      const eventName = k.slice(2).toLowerCase();
-      el._friedHandlers = el._friedHandlers || {};
-      el._friedHandlers[eventName] = v;
-      el.addEventListener(eventName, (e) => el._friedHandlers?.[eventName]?.(e));
-    } else if (k === "class") {
-      el.className = v;
-    } else if (k === "checked") {
-      el.checked = !!v;
-    } else if (v !== false && v != null) {
-      el.setAttribute(k, v);
+  for (const k in props) {
+    const v = props[k];
+    if      (k === "key")                   el.dataset.friedKey = v;
+    else if (k === "class")                 el.className = v;
+    else if (k === "checked")               el.checked = !!v;
+    else if (k.startsWith("on") && typeof v === "function") {
+      const evt = k.slice(2).toLowerCase();
+      if (!el._friedHandlers) el._friedHandlers = {};
+      el._friedHandlers[evt] = v;
+      el.addEventListener(evt, e => el._friedHandlers[evt]?.(e));
+    } else if (v !== false && v != null)    el.setAttribute(k, v);
+  }
+
+  // Flatten children without Array.flat() allocation
+  for (let i = 0; i < children.length; i++) {
+    const c = children[i];
+    if (c == null || c === false) continue;
+    if (Array.isArray(c)) {
+      for (let j = 0; j < c.length; j++) {
+        const cc = c[j];
+        if (cc == null || cc === false) continue;
+        el.appendChild(typeof cc === "string" || typeof cc === "number" ? document.createTextNode(String(cc)) : cc);
+      }
+    } else {
+      el.appendChild(typeof c === "string" || typeof c === "number" ? document.createTextNode(String(c)) : c);
     }
   }
-  for (const child of children.flat()) {
-    if (child == null || child === false) continue;
-    el.appendChild(
-      typeof child === "string" || typeof child === "number" ? document.createTextNode(String(child)) : child
-    );
-  }
   return el;
-}
-
-export function uid() {
-  return Math.random().toString(36).slice(2, 10);
 }
