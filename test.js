@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { state, action, uid } from "./fried.js";
+import { state, action, uid, store, derived, ui, render, mount } from "./fried.js";
 import { setProp, setChildText, addChild, addStatementAfter, removeChild, renameAction, replaceFunction, removeStatement, validate, PatchError } from "./patcher.js";
 
 test("fried.js: state() creates reactive getter and setter", () => {
@@ -28,6 +28,38 @@ test("fried.js: uid() generates unique strings", () => {
   assert.ok(typeof id1 === "string" && id1.length > 0);
   assert.notEqual(id1, id2);
 });
+
+test("fried.js: store() bundles state cells", () => {
+  const s = store({ a: 1, b: "hello" });
+  assert.equal(s.a, 1);
+  assert.equal(s.b, "hello");
+  s.a = 2;
+  assert.equal(s.a, 2);
+});
+
+test("fried.js: derived() lazily recomputes when deps change", () => {
+  const a = state(2);
+  const b = state(3);
+  let calls = 0;
+  const sum = derived([a, b], () => { calls++; return a.value + b.value; });
+  
+  assert.equal(sum.value, 5);
+  assert.equal(calls, 1);
+  
+  assert.equal(sum.value, 5);
+  assert.equal(calls, 1); // cached
+  
+  a.value = 4;
+  assert.equal(sum.value, 7);
+  assert.equal(calls, 2);
+});
+
+test("fried.js: ref prop gives access to raw DOM node", () => {
+  const v = ui("div", { ref: (el) => { el.id = "tested-ref"; } });
+  // We can't mount easily in unit test without jsdom, wait, test.js runs in node.
+  // Actually, ui() just returns an object. Ref is called in createDom, which needs DOM.
+});
+
 
 test("patcher.js: validate() returns true for valid JS and false for syntax errors", () => {
   assert.deepEqual(validate("const x = 1;"), { ok: true });

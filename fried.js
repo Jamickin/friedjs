@@ -106,6 +106,7 @@ function createDom(v) {
   el._friedHandlers = v._friedHandlers;
   el._friedProps = v.props;
   el._friedTag = v.tag;
+  if (v.props?.ref) v.props.ref(el);
   // Mirror the key onto a real DOM attribute (not just the internal
   // _friedKey property) so `[data-fried-key="..."]` queries -- used
   // throughout this project's own tests, verify scripts, and by anyone
@@ -168,7 +169,8 @@ function hydrateAttrs(o, n) {
       if (isSvg) o.setAttribute("class", nv || "");
       else o.className = nv || "";
     } else if (k === "checked") o.checked = !!nv;
-    else if (k === "value")   { if (o !== document.activeElement) o.value = nv; }
+    else if (k === "value")   { const vStr = nv == null ? "" : String(nv); if (o.value !== vStr) o.value = vStr; }
+    else if (k === "ref")     { if (op.ref !== nv) { if (op.ref) op.ref(null); if (nv) nv(o); } }
     // Fixed: this used to be lumped in with the "skip, key is set only at
     // creation" branch below, so a node's key could go stale forever once
     // it was reused across a render where the key itself changed (most
@@ -191,6 +193,7 @@ function hydrateAttrs(o, n) {
       else o.className = "";
     } else if (k === "checked") o.checked = false;
     else if (k === "key")     { o._friedKey = undefined; o.removeAttribute("data-fried-key"); }
+    else if (k === "ref")     { if (op.ref) op.ref(null); }
     else if (!k.startsWith("on")) o.removeAttribute(k);
   }
 
@@ -314,6 +317,30 @@ export function state(initial) {
   return {
     get value() { return v; },
     set value(next) { if (v === next) return; v = next; scheduleRender(); },
+  };
+}
+
+export function store(initial) {
+  const s = {};
+  for (const k in initial) {
+    const cell = state(initial[k]);
+    Object.defineProperty(s, k, { get: () => cell.value, set: (v) => { cell.value = v; } });
+  }
+  return s;
+}
+
+export function derived(deps, fn) {
+  let cached;
+  let lastVals = [];
+  return {
+    get value() {
+      const curVals = deps.map(d => d.value);
+      if (lastVals.length === 0 || curVals.some((v, i) => v !== lastVals[i])) {
+        cached = fn();
+        lastVals = curVals;
+      }
+      return cached;
+    }
   };
 }
 
