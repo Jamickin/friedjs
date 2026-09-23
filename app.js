@@ -39,7 +39,9 @@ const testSuiteResults = state(null);
 const stressNodes = state([]);
 const tickerActive = state(false);
 const viewport = state({ scrollTop: 0, width: typeof window !== "undefined" ? window.innerWidth : 1200 }); 
-const auditToast = state(null); // { type: 'success' | 'error', text: '' }
+const auditToast = state(null);
+
+const auditLabel = state("baseline"); // { type: 'success' | 'error', text: '' }
 
 // Advanced Profiling State
 const cpuLoadPct = state(0);
@@ -182,6 +184,7 @@ function computeTelemetryStats() {
 }
 
 function buildAuditPayload() {
+  const label = typeof auditLabel !== "undefined" ? auditLabel.value : "baseline";
   const stats = computeTelemetryStats();
   const mem = (typeof performance !== "undefined" && performance.memory)
     ? {
@@ -996,7 +999,9 @@ function renderAuditPanel() {
     ]),
 
     // Action Buttons
-    ui("div", { key: "audit-btns-row", class: "button-row" }, [
+    ui("div", { key: "audit-btns-row", class: "button-row", style: "align-items: center;" }, [
+      ui("input", { key: "audit-label", type: "text", value: auditLabel.value, oninput: (e) => auditLabel.value = e.target.value, placeholder: "Audit Label (e.g. baseline)", class: "input" }),
+
       ui("button", { key: "btn-send-server", class: "btn btn-primary", onclick: sendAuditToServer }, [
         "📤 Save Audit to Workspace (for Agent)"
       ]),

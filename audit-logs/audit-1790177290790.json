@@ -1,0 +1,44 @@
+{
+  "timestamp": "2026-09-23T15:28:31.995Z",
+  "type": "agent-handoff-audit",
+  "note": "Written by a Claude Code session working on this repo, for whichever agent picks this up next -- not runtime telemetry, a findings summary.",
+  "summary": "This session (1) optimized fried.js's runtime, (2) found and fixed 3 real bugs in patcher.js via adversarial testing, (3) worked a 7-item improvement backlog end to end, dogfooding the patcher throughout and extending it (removeStatement) when it hit a real capability gap, (4) then patcher.js was overwritten externally -- by the user's account, another agent working on a parallel copy at ~/Downloads/fried-app-copy/fried-app copy/src/patcher.js -- and that overwrite reintroduced 2 of the 3 bugs this session had fixed, plus broke 2 of this session's own removeStatement tests.",
+  "currentTestState": {
+    "command": "node test.js",
+    "pass": 19,
+    "fail": 4,
+    "failingTests": [
+      {
+        "name": "patcher.js: setProp() throws instead of silently editing the wrong node when a key is duplicated",
+        "cause": "REGRESSION. findUiCallsByKey() was reverted to `found.set(key, node)` (last-write-wins, one node per key) instead of tracking an array per key. requireUiNode() no longer checks nodes.length > 1. Confirmed bug this session: two ui(...) calls sharing a `key` cause setProp/setChildText/addChild to silently edit whichever call the Map happened to keep, with no warning -- an AI agent addressing 'the element with key x' gets no signal it hit the wrong one."
+      },
+      {
+        "name": "patcher.js: removeChild() throws instead of silently removing the wrong child when a child key is duplicated",
+        "cause": "Same root cause as above, in removeChild()'s own separate child-key scan (not routed through findUiCallsByKey, has its own copy of the same bug)."
+      },
+      {
+        "name": "patcher.js: removeStatement() removes an exported function declaration",
+        "cause": "External removeStatement() throws 'no top-level const or function named \"greet\" found' for `export function greet() {...}` -- its ExportNamedDeclaration handling doesn't match this session's version. Needs reconciling, not just reverting: the external version added useful things (see below) that shouldn't be thrown away to fix this."
+      },
+      {
+        "name": "patcher.js: removeStatement() refuses a multi-declarator statement rather than guess",
+        "cause": "External removeStatement() no longer throws for `let a, b, c;` when asked to remove `b` -- this session's version deliberately refuses (removing the whole statement would silently delete a and c too). Need to check what the external version actually does in this case; if it silently removes the whole statement or guesses, that's a correctness risk worth fixing before this ships."
+      }
+    ]
+  },
+  "friedJsState": {
+    "command": "node stress.js",
+    "pass": 43,
+    "fail": 0,
+    "note": "fried.js itself was NOT touched by the external change -- only patcher.js was overwritten. All this session's runtime work (prefix/suffix fast-path diffing, event-handler tests, mount/unmount thrashing, etc.) is intact and verified."
+  },
+  "externalChangeWorthKeeping": {
+    "description": "The version that overwrote patcher.js also added real value this session didn't have: Levenshtein-based 'nearest match' suggestions on failed lookups (requireUiNode, presumably others), a batch-patching entry point, and a validate() that returns structured {line, column, pos} instead of just a message string. These look genuinely useful and worth reconciling INTO the codebase, not discarding to fix the regressions above.",
+    "recommendation": "Whoever picks this up: reconcile rather than choose one side wholesale. Keep the nearest-match/structured-validate/batch additions. Restore the array-per-key duplicate-key check in findUiCallsByKey/requireUiNode (and removeChild's own copy of that scan) that the external version dropped. Reconcile removeStatement's exported-function and multi-declarator handling -- re-run this session's test.js (specifically the 4 failing tests listed above) as the acceptance check once done."
+  },
+  "sessionArtifacts": {
+    "newFile": "stress.js (43 checks: keyed-diff identity preservation at scale, sync state-churn coalescing, css() cache dedup, event-handler correctness, mount/unmount thrashing, recursion-ceiling probe)",
+    "npmScripts": ["stress", "verify"],
+    "notCommitted": "Nothing from this session was committed to git; working tree has uncommitted changes in fried.js, patcher.js (now externally modified), test.js, package.json"
+  }
+}

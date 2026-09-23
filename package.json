@@ -6,6 +6,8 @@
     "start": "node server.js",
     "test": "node test.js",
     "bench": "node benchmark.js",
+    "stress": "node stress.js",
+    "verify": "node test.js && node stress.js",
     "build": "node build.js",
     "serve:prod": "node server-prod.js"
   },
