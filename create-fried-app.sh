@@ -109,17 +109,17 @@ curl -sL "https://raw.githubusercontent.com/Jamickin/friedjs/main/fried.js" -o f
 
 if [[ "$INC_DB" =~ ^[Yy]$ ]]; then
     echo "➕ Downloading Database module..."
-    curl -sL "https://raw.githubusercontent.com/Jamickin/friedjs/main/fried-db.js" -o addons/fried-db.js
+    curl -sL "https://raw.githubusercontent.com/Jamickin/friedjs/main/addons/fried-db.js" -o addons/fried-db.js
 fi
 
 if [[ "$INC_VIRTUAL" =~ ^[Yy]$ ]]; then
     echo "➕ Downloading Virtual Scroller module..."
-    curl -sL "https://raw.githubusercontent.com/Jamickin/friedjs/main/fried-virtual.js" -o addons/fried-virtual.js
+    curl -sL "https://raw.githubusercontent.com/Jamickin/friedjs/main/addons/fried-virtual.js" -o addons/fried-virtual.js
 fi
 
 if [[ "$INC_ROUTER" =~ ^[Yy]$ ]]; then
     echo "➕ Downloading Hash Router module..."
-    curl -sL "https://raw.githubusercontent.com/Jamickin/friedjs/main/fried-router.js" -o addons/fried-router.js
+    curl -sL "https://raw.githubusercontent.com/Jamickin/friedjs/main/addons/fried-router.js" -o addons/fried-router.js
 fi
 
 if [[ "$INC_AI" =~ ^[Yy]$ ]]; then
