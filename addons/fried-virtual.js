@@ -22,7 +22,7 @@
 // when a single list in an app is large enough (a few hundred rows+) that
 // its rebuild cost is the thing making the app feel slow.
 
-import { state } from "./fried.js";
+import { state } from "../fried.js";
 
 /**
  * createVirtualList(opts) -> a reactive scroll window over an array you

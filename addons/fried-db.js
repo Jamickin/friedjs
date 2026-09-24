@@ -1,4 +1,4 @@
-import { state, action } from "./fried.js";
+import { state, action } from "../fried.js";
 
 // Tiny, zero-dependency IndexedDB wrapper for background persistence
 const idb = {
