@@ -125,6 +125,14 @@ function createDom(v) {
     if (k === "class") {
       if (isSvg) el.setAttribute("class", val); else el.className = val;
     } else if (k === "checked") el.checked = !!val;
+    // Write through the `.value` IDL property, not setAttribute: for
+    // <input> the two happen to agree on a fresh element, but <textarea>
+    // has no content-reflecting `value` attribute at all -- setAttribute
+    // silently does nothing, so a pre-filled ui("textarea", {value, ...})
+    // would render empty. `.value =` is correct for every value-holding
+    // element (input/textarea/select) and matches how hydrateAttrs already
+    // updates this same prop after the first render.
+    else if (k === "value")   { el.value = val == null ? "" : String(val); }
     else if (k.startsWith("on")) {}
     else if (val !== false && val != null) el.setAttribute(k, val);
   }
@@ -161,6 +169,7 @@ function hydrate(o, n) {
 function hydrateAttrs(o, n) {
   const op = o._friedProps || EMPTY, np = n.props || EMPTY;
   const isSvg = o.namespaceURI === "http://www.w3.org/2000/svg";
+  let valueSkipped = false;
 
   for (const k in np) {
     const nv = np[k];
@@ -169,7 +178,13 @@ function hydrateAttrs(o, n) {
       if (isSvg) o.setAttribute("class", nv || "");
       else o.className = nv || "";
     } else if (k === "checked") o.checked = !!nv;
-    else if (k === "value")   { const vStr = nv == null ? "" : String(nv); if (o.value !== vStr) o.value = vStr; }
+    // Skip the real write while focused so we don't clobber in-progress
+    // typing -- but that means `nv` was never actually applied, so it must
+    // not be allowed to become the tracked _friedProps.value below either
+    // (see the valueSkipped handling at the end of this function), or a
+    // future render with the same nv would wrongly believe the DOM already
+    // reflects it and never retry the write once the field blurs.
+    else if (k === "value")   { const vStr = nv == null ? "" : String(nv); if (o === document.activeElement) valueSkipped = true; else if (o.value !== vStr) o.value = vStr; }
     else if (k === "ref")     { if (op.ref !== nv) { if (op.ref) op.ref(null); if (nv) nv(o); } }
     // Fixed: this used to be lumped in with the "skip, key is set only at
     // creation" branch below, so a node's key could go stale forever once
@@ -198,7 +213,11 @@ function hydrateAttrs(o, n) {
   }
 
   o._friedHandlers = n._friedHandlers;
-  o._friedProps = np;
+  // If the value write above was skipped (input focused), keep the tracked
+  // value at what's actually on screen rather than adopting `nv` -- so the
+  // next render, if `nv` is still different from the real DOM value, tries
+  // the write again instead of believing it already happened.
+  o._friedProps = valueSkipped ? { ...np, value: op.value } : np;
 }
 
 function hydrateChildren(op, np) {
