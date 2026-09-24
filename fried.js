@@ -131,8 +131,11 @@ function createDom(v) {
     // silently does nothing, so a pre-filled ui("textarea", {value, ...})
     // would render empty. `.value =` is correct for every value-holding
     // element (input/textarea/select) and matches how hydrateAttrs already
-    // updates this same prop after the first render.
-    else if (k === "value")   { el.value = val == null ? "" : String(val); }
+    // updates this same prop after the first render. <textarea> has no
+    // "value" attribute to mirror, but <input>/<select> do (defaultValue,
+    // form.reset()) -- set it too, on those, so a fresh element created
+    // with a value prop still resets to that value, not "".
+    else if (k === "value")   { const vStr = val == null ? "" : String(val); el.value = vStr; if (v.tag !== "textarea") el.setAttribute("value", vStr); }
     else if (k.startsWith("on")) {}
     else if (val !== false && val != null) el.setAttribute(k, val);
   }
