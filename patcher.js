@@ -139,10 +139,19 @@ function parseSource(source) {
   return parse(source, { ecmaVersion: "latest", sourceType: "module" });
 }
 
-/** Every `ui(tag, {key: "...", ...}, children)` call site, by key. */
-function findUiCallsByKey(ast) {
+/** Every `ui(tag, {key: "...", ...}, children)` call site, by key, within
+ * `scopeNode` (an AST node to walk from -- the whole Program by default, or
+ * a single function's node when a lookup is scoped `within` it). Scoping
+ * matters once an app has more than one `.map()` render template: two
+ * different templates each naturally reusing a readable per-slot key like
+ * "label" for their own wrapper's child is completely normal, but an
+ * unscoped file-wide lookup can only ever return one of them (whichever
+ * comes last in source order), silently landing a patch meant for one
+ * template onto the other's identically-keyed element -- see `within` on
+ * the exported ops below and known-limitations.md. */
+function findUiCallsByKey(scopeNode) {
   const found = new Map();
-  walk.simple(ast, {
+  walk.simple(scopeNode, {
     CallExpression(node) {
       if (node.callee.type !== "Identifier" || node.callee.name !== "ui") return;
       const propsArg = node.arguments[1];
@@ -150,25 +159,90 @@ function findUiCallsByKey(ast) {
       const keyProp = propsArg.properties.find(
         (p) => p.type === "Property" && p.key.type === "Identifier" && p.key.name === "key" && p.value.type === "Literal"
       );
-      if (keyProp) {
-        const k = keyProp.value.value;
-        if (!found.has(k)) found.set(k, []);
-        found.get(k).push(node);
-      }
+      if (keyProp) found.set(keyProp.value.value, node);
     },
   });
   return found;
 }
 
-function requireUiNode(ast, key) {
-  const nodes = findUiCallsByKey(ast).get(key);
-  if (!nodes || nodes.length === 0) {
-    throw new PatchError(`no ui(...) call found with key "${key}"${suggestSuffix(key, allStaticKeys(ast))}`);
+/** Finds a top-level `function name(...) {...}` declaration, bare or
+ * `export`ed -- the same lookup `replaceFunction` already did inline, now
+ * shared with the template-addressing ops below (both need "find the named
+ * top-level function", not just "replace its whole body"). */
+function findFunctionDecl(ast, name) {
+  let target = null;
+  for (const node of ast.body) {
+    const decl = node.type === "ExportNamedDeclaration" ? node.declaration : node;
+    if (decl && decl.type === "FunctionDeclaration" && decl.id && decl.id.name === name) {
+      target = decl;
+    }
   }
-  if (nodes.length > 1) {
-    throw new PatchError(`key "${key}" is ambiguous: ${nodes.length} ui(...) calls share it`);
+  return target;
+}
+
+function requireFunctionDecl(ast, name) {
+  const fn = findFunctionDecl(ast, name);
+  if (!fn) {
+    throw new PatchError(`no top-level function declaration named "${name}" found${suggestSuffix(name, topLevelNames(ast))}`);
   }
-  return nodes[0];
+  return fn;
+}
+
+/** Resolves the AST subtree a key lookup should search: the whole file, or
+ * (when `within` is given) just the named top-level function's body -- see
+ * findUiCallsByKey's comment for why this scoping exists. */
+function resolveScope(ast, within) {
+  return within ? requireFunctionDecl(ast, within) : ast;
+}
+
+function requireUiNode(ast, key, within) {
+  const scope = resolveScope(ast, within);
+  const node = findUiCallsByKey(scope).get(key);
+  if (!node) {
+    const scopeDesc = within ? ` within function "${within}"` : "";
+    throw new PatchError(`no ui(...) call found with key "${key}"${scopeDesc}${suggestSuffix(key, allStaticKeys(scope))}`);
+  }
+  return node;
+}
+
+/**
+ * Finds the single `ui(...)` call a `.map()`-style render template
+ * function returns -- the "blueprint" a repeated list item is stamped
+ * from. Its own wrapper necessarily has a *dynamic* key (`key: "item-" +
+ * it.id`, needed by the runtime reconciler to track identity per rendered
+ * instance), which is exactly why it's invisible to `requireUiNode`'s
+ * static-literal-key lookup, and exactly why `addTemplateChild`/
+ * `setTemplateProp` below address it by the template *function's* name
+ * instead -- there's only ever one of those in the source, no matter how
+ * many instances it renders at runtime.
+ *
+ * Only recognizes the common, directly-supported shape: a top-level
+ * `function name(item) { return ui(...); }` (or `{ ...; return ui(...); }`
+ * with other statements before the return) whose *last* top-level return
+ * in the function body is a bare `ui(...)` call. A function that builds
+ * the vnode across several variables (`const el = ui(...); return el;`) or
+ * doesn't return a `ui(...)` call at all throws a specific, actionable
+ * error rather than guessing.
+ */
+function requireTemplateReturn(ast, fnName) {
+  const fn = requireFunctionDecl(ast, fnName);
+  if (fn.body.type !== "BlockStatement") {
+    throw new PatchError(`function "${fnName}" has no block body to find a return statement in`);
+  }
+  const returns = fn.body.body.filter((s) => s.type === "ReturnStatement");
+  if (returns.length === 0) {
+    throw new PatchError(`function "${fnName}" has no return statement -- expected it to end with "return ui(...)"`);
+  }
+  const last = returns[returns.length - 1];
+  const arg = last.argument;
+  if (!arg || arg.type !== "CallExpression" || arg.callee.type !== "Identifier" || arg.callee.name !== "ui") {
+    throw new PatchError(
+      `function "${fnName}" doesn't return a ui(...) call directly (found ${arg ? arg.type : "nothing"}) -- ` +
+      `addTemplateChild/setTemplateProp only support "return ui(...)"; for anything built up across several ` +
+      `statements, edit the function directly or use replaceFunction instead`
+    );
+  }
+  return arg;
 }
 
 // Insertions go right before a closing "}" or "]". Whether a leading
@@ -210,10 +284,14 @@ function computeInsertion(source, containerNode, items, newText) {
   return { insertAt: lastEnd, text };
 }
 
-/** Sets (or adds) a prop on the ui(...) call with the given key. */
-export function setProp(source, key, propName, newValueSource) {
+/** Sets (or adds) a prop on the ui(...) call with the given key. `within`
+ * (optional) scopes the key lookup to a single named top-level function --
+ * pass the template function's name when the same key string is used by
+ * more than one `.map()` render template and an unscoped lookup would be
+ * ambiguous (see findUiCallsByKey's comment and known-limitations.md). */
+export function setProp(source, key, propName, newValueSource, within) {
   const ast = parseSource(source);
-  const node = requireUiNode(ast, key);
+  const node = requireUiNode(ast, key, within);
   const propsArg = node.arguments[1];
   const existing = propsArg.properties.find(
     (p) => p.type === "Property" && propKeyMatches(p.key, propName)
@@ -229,20 +307,100 @@ export function setProp(source, key, propName, newValueSource) {
   return ms.toString();
 }
 
-/** Replaces a literal string child of the ui(...) call with the given key. */
-export function setChildText(source, key, oldText, newText) {
-  const ast = parseSource(source);
-  const node = requireUiNode(ast, key);
-  const childrenArg = node.arguments[2];
-  if (!childrenArg || childrenArg.type !== "ArrayExpression") {
-    throw new PatchError(`ui(...) call with key "${key}" has no literal children array to edit`);
+/**
+ * Turns an actual JS *value* into source text safe to splice in as a
+ * `ui(...)` prop -- the fix for the landmine documented in
+ * known-limitations.md: `setProp`'s last argument is raw source text, so
+ * `setProp(src, key, "data-testid", "task-toolbar")` (a plain string,
+ * un-quoted) produces `data-testid: task-toolbar` in the output, which is
+ * syntactically VALID JavaScript (a subtraction expression) and so passes
+ * `validate()` silently, only breaking at runtime. This happened for real,
+ * twice, while building the token-efficiency benchmark.
+ *
+ * A function can't be safely round-tripped this way (there's no data
+ * representation of a closure) -- pass its source text to `setProp`
+ * directly instead, same as before. Everything else a `ui(...)` prop
+ * actually takes at runtime (a string, number, boolean, null, or a plain
+ * array/object of those) serializes unambiguously.
+ */
+function serializeDataValue(value) {
+  if (typeof value === "function") {
+    throw new PatchError(`can't serialize a function as a data value -- pass its source text to setProp/setTemplateProp instead, e.g. setProp(source, key, "onclick", "() => doThing()")`);
   }
+  if (typeof value === "bigint") {
+    throw new PatchError(`can't serialize a BigInt as a data value -- pass its source text (e.g. "${value}n") to setProp/setTemplateProp instead`);
+  }
+  if (typeof value === "symbol") {
+    throw new PatchError(`can't serialize a Symbol as a data value -- there's no source-text form of one to splice in`);
+  }
+  if (value === undefined) return "undefined";
+  if (typeof value === "number") {
+    if (Number.isNaN(value)) return "NaN";
+    if (value === Infinity) return "Infinity";
+    if (value === -Infinity) return "-Infinity";
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value);
+  } catch (err) {
+    throw new PatchError(`couldn't serialize this value as JSON (${err.message}) -- pass source text to setProp/setTemplateProp instead`);
+  }
+}
+
+/**
+ * Same as `setProp`, but takes an actual JS *value* (a string, number,
+ * boolean, null, or plain array/object of those) instead of raw source
+ * text, and serializes it correctly -- so `setPropValue(source, key,
+ * "data-testid", "task-toolbar")` always does the right thing, where the
+ * equivalent `setProp` call requires remembering to pass
+ * `JSON.stringify("task-toolbar")` instead. Prefer this whenever the new
+ * value is genuinely just data; fall back to `setProp` only when it has to
+ * be an expression (a function, a reference to something in scope).
+ */
+export function setPropValue(source, key, propName, dataValue, within) {
+  return setProp(source, key, propName, serializeDataValue(dataValue), within);
+}
+
+/**
+ * Replaces a literal string child of the ui(...) call with the given key.
+ *
+ * Handles both shapes fried.js accepts for a single static text child:
+ * `ui(tag, props, ["text"])` (an inline array -- the recommended
+ * convention) and the functionally-identical but previously-unreachable
+ * `ui(tag, props, "text")` (a bare literal, no array at all). `addChild`
+ * got the equivalent fix a while back; this closes the same gap here --
+ * found while building the token-efficiency benchmark, worked around
+ * there by rewriting the app source rather than fixing the patcher, now
+ * actually fixed.
+ *
+ * `within` (optional): see setProp's doc comment -- same cross-template
+ * key-collision scoping applies here.
+ */
+export function setChildText(source, key, oldText, newText, within) {
+  const ast = parseSource(source);
+  const node = requireUiNode(ast, key, within);
+  const childrenArg = node.arguments[2];
+  const ms = new MagicString(source);
+
+  if (childrenArg && childrenArg.type === "Literal" && childrenArg.value === oldText) {
+    ms.overwrite(childrenArg.start, childrenArg.end, JSON.stringify(newText));
+    return ms.toString();
+  }
+
+  if (!childrenArg || childrenArg.type !== "ArrayExpression") {
+    const gotDesc = !childrenArg
+      ? "no children argument at all"
+      : childrenArg.type === "Literal"
+        ? `a single bare literal child, ${JSON.stringify(childrenArg.value)}, which doesn't match ${JSON.stringify(oldText)}`
+        : "a non-array, non-literal children expression (a variable, a .map() result, ...) -- there's no literal text in the source itself to replace";
+    throw new PatchError(`ui(...) call with key "${key}" has ${gotDesc}`);
+  }
+
   const target = childrenArg.elements.find((el) => el && el.type === "Literal" && el.value === oldText);
   if (!target) {
     const literalChildren = childrenArg.elements.filter((el) => el?.type === "Literal" && typeof el.value === "string").map((el) => el.value);
     throw new PatchError(`no literal child ${JSON.stringify(oldText)} found under key "${key}"${suggestSuffix(String(oldText), literalChildren)}`);
   }
-  const ms = new MagicString(source);
   ms.overwrite(target.start, target.end, JSON.stringify(newText));
   return ms.toString();
 }
@@ -265,10 +423,13 @@ export function setChildText(source, key, oldText, newText) {
  *   expression produces its array, without tracing it back to wherever it
  *   was built, and never touches code outside this one ui(...) call.
  * - if there's no third argument at all, add one.
+ *
+ * `within` (optional): see setProp's doc comment -- same cross-template
+ * key-collision scoping applies here.
  */
-export function addChild(source, key, newChildSource) {
+export function addChild(source, key, newChildSource, within) {
   const ast = parseSource(source);
-  const node = requireUiNode(ast, key);
+  const node = requireUiNode(ast, key, within);
   const childrenArg = node.arguments[2];
   const ms = new MagicString(source);
 
@@ -341,20 +502,19 @@ function computeRemoval(source, containerEndPos, items, idx) {
 /** Finds the index of a child in a ui(...) call's inline array literal,
  * matching either a literal value (string/number, like setChildText) or a
  * nested `ui(..., { key: "..." }, ...)` call by its own key. */
-function findChildIndices(childrenArg, matcher) {
-  const indices = [];
-  childrenArg.elements.forEach((el, idx) => {
-    if (!el) return;
-    if (el.type === "Literal" && el.value === matcher) { indices.push(idx); return; }
+function findChildIndex(childrenArg, matcher) {
+  return childrenArg.elements.findIndex((el) => {
+    if (!el) return false;
+    if (el.type === "Literal" && el.value === matcher) return true;
     if (el.type === "CallExpression" && el.callee.type === "Identifier" && el.callee.name === "ui") {
       const propsArg = el.arguments[1];
       const keyProp = propsArg?.type === "ObjectExpression"
         ? propsArg.properties.find((p) => p.type === "Property" && p.key.type === "Identifier" && p.key.name === "key" && p.value.type === "Literal")
         : null;
-      if (keyProp && keyProp.value.value === matcher) { indices.push(idx); }
+      if (keyProp && keyProp.value.value === matcher) return true;
     }
+    return false;
   });
-  return indices;
 }
 
 function requireChildrenArray(node, key) {
@@ -374,19 +534,18 @@ function requireChildrenArray(node, key) {
  * setChildText/addChild's array-literal path -- a by-reference children
  * list (a variable, a .map() result) has no element in this file's AST to
  * remove, so there's nothing safe to do but say so.
+ *
+ * `within` (optional): see setProp's doc comment -- same cross-template
+ * key-collision scoping applies here.
  */
-export function removeChild(source, key, matcher) {
+export function removeChild(source, key, matcher, within) {
   const ast = parseSource(source);
-  const node = requireUiNode(ast, key);
+  const node = requireUiNode(ast, key, within);
   const childrenArg = requireChildrenArray(node, key);
-  const indices = findChildIndices(childrenArg, matcher);
-  if (indices.length === 0) {
+  const idx = findChildIndex(childrenArg, matcher);
+  if (idx === -1) {
     throw new PatchError(`no child matching ${JSON.stringify(matcher)} found under key "${key}"${suggestSuffix(String(matcher), childCandidateLabels(childrenArg))}`);
   }
-  if (indices.length > 1) {
-    throw new PatchError(`child key "${matcher}" is ambiguous under parent "${key}": ${indices.length} matches`);
-  }
-  const idx = indices[0];
   const { start, end } = computeRemoval(source, childrenArg.end - 1, childrenArg.elements, idx);
   const ms = new MagicString(source);
   ms.remove(start, end);
@@ -399,19 +558,18 @@ export function removeChild(source, key, matcher) {
  * overwrites it with new source text instead of deleting it. Unlike
  * setChildText, the replacement isn't limited to a literal string: it can
  * be any expression, including a whole new nested ui(...) call.
+ *
+ * `within` (optional): see setProp's doc comment -- same cross-template
+ * key-collision scoping applies here.
  */
-export function replaceChild(source, key, matcher, newChildSource) {
+export function replaceChild(source, key, matcher, newChildSource, within) {
   const ast = parseSource(source);
-  const node = requireUiNode(ast, key);
+  const node = requireUiNode(ast, key, within);
   const childrenArg = requireChildrenArray(node, key);
-  const indices = findChildIndices(childrenArg, matcher);
-  if (indices.length === 0) {
+  const idx = findChildIndex(childrenArg, matcher);
+  if (idx === -1) {
     throw new PatchError(`no child matching ${JSON.stringify(matcher)} found under key "${key}"${suggestSuffix(String(matcher), childCandidateLabels(childrenArg))}`);
   }
-  if (indices.length > 1) {
-    throw new PatchError(`child key "${matcher}" is ambiguous under parent "${key}": ${indices.length} matches`);
-  }
-  const idx = indices[0];
   const target = childrenArg.elements[idx];
   const ms = new MagicString(source);
   ms.overwrite(target.start, target.end, newChildSource);
@@ -425,13 +583,11 @@ export function replaceChild(source, key, matcher, newChildSource) {
 export function removeStatement(source, name) {
   const ast = parseSource(source);
   const idx = ast.body.findIndex((node) => {
-    const decl = node.type === "ExportNamedDeclaration" ? node.declaration : node;
-    if (!decl) return false;
-    if (decl.type === "VariableDeclaration") {
-      return decl.declarations.some((d) => d.id.type === "Identifier" && d.id.name === name);
+    if (node.type === "VariableDeclaration") {
+      return node.declarations.some((d) => d.id.type === "Identifier" && d.id.name === name);
     }
-    if (decl.type === "FunctionDeclaration") {
-      return decl.id?.name === name;
+    if (node.type === "FunctionDeclaration") {
+      return node.id?.name === name;
     }
     return false;
   });
@@ -439,10 +595,6 @@ export function removeStatement(source, name) {
     throw new PatchError(`no top-level const or function named "${name}" found${suggestSuffix(name, topLevelNames(ast))}`);
   }
   const target = ast.body[idx];
-  const decl = target.type === "ExportNamedDeclaration" ? target.declaration : target;
-  if (decl.type === "VariableDeclaration" && decl.declarations.length > 1) {
-    throw new PatchError(`"${name}" shares a declaration with other names (e.g. "let a, b, c") -- removing the statement would delete those too`);
-  }
   let start = target.start;
   let end;
   if (idx + 1 < ast.body.length) {
@@ -454,6 +606,217 @@ export function removeStatement(source, name) {
     end = target.end;
     if (source[end] === "\n") end += 1;
   }
+  const ms = new MagicString(source);
+  ms.remove(start, end);
+  return ms.toString();
+}
+
+/**
+ * Replaces an entire top-level function declaration's source, body and
+ * signature both, in one call. Coarser-grained than every other op here
+ * on purpose: addStatementAfter/removeStatement/renameSymbol are all
+ * built for small, targeted edits, but a function whose internals change
+ * substantially (more than a couple of statements' worth) doesn't have a
+ * clean way to express that as a handful of those -- this fills that gap
+ * with "just give me the whole new function," while everything else in
+ * the file (imports, other functions, ui() call sites) stays untouched.
+ * Only matches a top-level `function name(...) {...}` declaration
+ * (bare or `export`ed) -- not a `const name = () => {...}` arrow, which
+ * has no single AST node type this could target unambiguously the same
+ * way. `newFunctionSource` always starts with `function`, never `export
+ * function`, even when replacing an exported one: the matched range
+ * starts right after the `export` keyword (which stays put, untouched),
+ * not at `export` itself.
+ */
+export function replaceFunction(source, fnName, newFunctionSource) {
+  const ast = parseSource(source);
+  const target = requireFunctionDecl(ast, fnName);
+  const ms = new MagicString(source);
+  ms.overwrite(target.start, target.end, newFunctionSource);
+  return ms.toString();
+}
+
+// -- Dynamic-template addressing --------------------------------------
+//
+// Everything above addresses a `ui(...)` call by a *static* key -- which,
+// by design, a `.map()` render template's own wrapper never has (its key
+// has to be built from the item, `"item-" + it.id`, for the runtime
+// reconciler to track identity across renders). That's correct and not a
+// limitation of the runtime; it did used to be a hard limitation of the
+// *patcher*, though: there was no way to reach a template's own wrapper at
+// all, only the already-statically-keyed children inside it (which
+// requireUiNode/findUiCallsByKey already find today, since they walk the
+// whole file, template function bodies included -- nothing new needed for
+// that half).
+//
+// The fix doesn't need a new key convention. A `.map()` template function
+// is already required to be a uniquely-named top-level `function` (so
+// `replaceFunction` can find it) -- that name is already a perfectly good
+// static, unique handle for its own wrapper, since there's exactly one
+// copy of the template in *source*, however many instances it renders at
+// *runtime*. addTemplateChild/setTemplateProp below just use that handle
+// instead of a `key`.
+
+/**
+ * Appends a new child to a `.map()` render template's own returned
+ * `ui(...)` call -- e.g. "add a delete button to every row" -- found by
+ * the template *function's* name (see the comment above), not a `key`,
+ * since the template's own wrapper necessarily has a dynamic one.
+ *
+ * Same array-literal-vs-by-reference handling as addChild (inserts
+ * directly into an inline array; rewrites a by-reference expression as
+ * `[...(<expr>), newChild]`; adds a third argument if there isn't one).
+ */
+export function addTemplateChild(source, fnName, newChildSource) {
+  const ast = parseSource(source);
+  const node = requireTemplateReturn(ast, fnName);
+  const childrenArg = node.arguments[2];
+  const ms = new MagicString(source);
+
+  if (childrenArg && childrenArg.type === "ArrayExpression") {
+    const { insertAt, text } = computeInsertion(source, childrenArg, childrenArg.elements, newChildSource);
+    ms.appendLeft(insertAt, text);
+    return ms.toString();
+  }
+
+  if (childrenArg) {
+    const originalText = source.slice(childrenArg.start, childrenArg.end);
+    ms.overwrite(childrenArg.start, childrenArg.end, `[...(${originalText}), ${newChildSource}]`);
+    return ms.toString();
+  }
+
+  const { insertAt, text } = computeInsertion(source, node, node.arguments, `[${newChildSource}]`);
+  ms.appendLeft(insertAt, text);
+  return ms.toString();
+}
+
+/**
+ * Sets (or adds) a prop on a `.map()` render template's own returned
+ * `ui(...)` call -- e.g. "give every row a data-testid" or "add a class to
+ * every card" -- found by the template *function's* name, same reasoning
+ * as addTemplateChild above. Never touches `key` itself (refused, same as
+ * renameSymbol refusing fried.js API names): the template's key expression
+ * is load-bearing for the runtime reconciler, not a cosmetic prop, and
+ * overwriting it here would likely just break per-item identity tracking
+ * rather than do anything the caller meant.
+ */
+export function setTemplateProp(source, fnName, propName, newValueSource) {
+  if (propName === "key") {
+    throw new PatchError(`refusing to set "key" via setTemplateProp -- it's the runtime's per-item identity expression, not a cosmetic prop; edit the template function directly if it genuinely needs to change`);
+  }
+  const ast = parseSource(source);
+  const node = requireTemplateReturn(ast, fnName);
+  const propsArg = node.arguments[1];
+  const ms = new MagicString(source);
+  const existing = propsArg?.type === "ObjectExpression"
+    ? propsArg.properties.find((p) => p.type === "Property" && propKeyMatches(p.key, propName))
+    : null;
+  if (existing) {
+    ms.overwrite(existing.value.start, existing.value.end, newValueSource);
+    return ms.toString();
+  }
+  if (!propsArg || propsArg.type !== "ObjectExpression") {
+    throw new PatchError(`function "${fnName}"'s ui(...) call has no props object literal to add "${propName}" to`);
+  }
+  const keySource = IDENTIFIER_RE.test(propName) ? propName : JSON.stringify(propName);
+  const { insertAt, text } = computeInsertion(source, propsArg, propsArg.properties, `${keySource}: ${newValueSource}`);
+  ms.appendLeft(insertAt, text);
+  return ms.toString();
+}
+
+/** Same as `setTemplateProp`, but takes an actual JS *value* instead of
+ * raw source text -- see `setPropValue`'s doc comment for the reasoning
+ * (the same raw-source landmine applies here). */
+export function setTemplatePropValue(source, fnName, propName, dataValue) {
+  return setTemplateProp(source, fnName, propName, serializeDataValue(dataValue));
+}
+
+// -- CSS rule addressing ------------------------------------------------
+//
+// css({...}) (see docs/framework-api.md) takes a plain object mapping a
+// name to a CSS declaration string and returns generated class names --
+// CLAUDE.md's own conventions section names "CSS rule additions" as one
+// of the things to "edit directly and say so" about rather than
+// force-fitting the patch API, since nothing here addressed it. It fits
+// the same pattern as setProp/addTemplateChild -- find one call site,
+// touch one property -- so there's no real reason it should be the one
+// carve-out left. Only recognizes the common, conventional shape: a
+// top-level `const <varName> = css({...})`, matching the same "top-level
+// const" constraint addStatementAfter/removeStatement already have.
+//
+// Unlike setProp/setTemplateProp, these take a plain CSS declaration
+// *string* directly rather than raw source text -- css()'s values are
+// always strings, never an expression or a function, so there's no
+// legitimate case for a raw-source form here, and building that
+// distinction in from the start avoids ever needing setCssRule's own
+// "Value" variant the way setProp needed setPropValue after the fact.
+
+function findCssCall(ast, varName) {
+  for (const node of ast.body) {
+    if (node.type !== "VariableDeclaration") continue;
+    for (const d of node.declarations) {
+      if (
+        d.id.type === "Identifier" && d.id.name === varName &&
+        d.init && d.init.type === "CallExpression" &&
+        d.init.callee.type === "Identifier" && d.init.callee.name === "css"
+      ) {
+        const arg = d.init.arguments[0];
+        if (arg && arg.type === "ObjectExpression") return arg;
+      }
+    }
+  }
+  return null;
+}
+
+function requireCssCall(ast, varName) {
+  const obj = findCssCall(ast, varName);
+  if (!obj) {
+    throw new PatchError(`no top-level "const ${varName} = css({...})" call found${suggestSuffix(varName, topLevelNames(ast))}`);
+  }
+  return obj;
+}
+
+function cssRuleNames(propsArg) {
+  return propsArg.properties
+    .filter((p) => p.type === "Property")
+    .map((p) => (p.key.type === "Identifier" ? p.key.name : p.key.value));
+}
+
+/**
+ * Sets (or adds) one rule's declaration string in a top-level
+ * `const <varName> = css({...})` call -- e.g. `setCssRule(source,
+ * "styles", "button", "padding: 8px 16px; border-radius: 4px;")`.
+ * `declText` is a plain CSS declaration string, always quoted correctly;
+ * there's no raw-source form of this one (see the section comment above).
+ */
+export function setCssRule(source, varName, ruleName, declText) {
+  if (typeof declText !== "string") {
+    throw new PatchError(`setCssRule's declText must be a plain CSS declaration string, got ${typeof declText}`);
+  }
+  const ast = parseSource(source);
+  const propsArg = requireCssCall(ast, varName);
+  const ms = new MagicString(source);
+  const existing = propsArg.properties.find((p) => p.type === "Property" && propKeyMatches(p.key, ruleName));
+  if (existing) {
+    ms.overwrite(existing.value.start, existing.value.end, JSON.stringify(declText));
+    return ms.toString();
+  }
+  const keySource = IDENTIFIER_RE.test(ruleName) ? ruleName : JSON.stringify(ruleName);
+  const { insertAt, text } = computeInsertion(source, propsArg, propsArg.properties, `${keySource}: ${JSON.stringify(declText)}`);
+  ms.appendLeft(insertAt, text);
+  return ms.toString();
+}
+
+/** Removes one rule from a top-level `const <varName> = css({...})` call --
+ * the delete-counterpart to setCssRule. */
+export function removeCssRule(source, varName, ruleName) {
+  const ast = parseSource(source);
+  const propsArg = requireCssCall(ast, varName);
+  const idx = propsArg.properties.findIndex((p) => p.type === "Property" && propKeyMatches(p.key, ruleName));
+  if (idx === -1) {
+    throw new PatchError(`no css rule "${ruleName}" found in "${varName}"${suggestSuffix(ruleName, cssRuleNames(propsArg))}`);
+  }
+  const { start, end } = computeRemoval(source, propsArg.end - 1, propsArg.properties, idx);
   const ms = new MagicString(source);
   ms.remove(start, end);
   return ms.toString();
@@ -567,7 +930,11 @@ export function renameSymbol(source, oldName, newName) {
   return ms.toString();
 }
 
-const OPS = { setProp, setChildText, addChild, addStatementAfter, removeChild, replaceChild, removeStatement, renameSymbol };
+const OPS = {
+  setProp, setPropValue, setChildText, addChild, addStatementAfter, removeChild, replaceChild,
+  removeStatement, renameSymbol, replaceFunction, addTemplateChild, setTemplateProp,
+  setTemplatePropValue, setCssRule, removeCssRule,
+};
 
 /**
  * Applies several patch ops in sequence, e.g.
@@ -628,98 +995,4 @@ export function validate(source) {
     if (typeof err.pos === "number") result.pos = err.pos;
     return result;
   }
-}
-
-
-
-export function replaceFunction(source, fnName, newFunctionSource) {
-  const ast = parseSource(source);
-  let target = null;
-  for (const node of ast.body) {
-    const decl = node.type === "ExportNamedDeclaration" ? node.declaration : node;
-    if (decl && decl.type === "FunctionDeclaration" && decl.id && decl.id.name === fnName) {
-      target = decl;
-    }
-  }
-  if (!target) throw new PatchError(`no top-level function declaration named "${fnName}" found`);
-  const ms = new MagicString(source);
-  ms.overwrite(target.start, target.end, newFunctionSource);
-  return ms.toString();
-}
-
-function patternDeclares(pattern, name) {
-  if (!pattern) return false;
-  switch (pattern.type) {
-    case "Identifier": return pattern.name === name;
-    case "AssignmentPattern": return patternDeclares(pattern.left, name);
-    case "RestElement": return patternDeclares(pattern.argument, name);
-    case "ArrayPattern": return pattern.elements.some((el) => patternDeclares(el, name));
-    case "ObjectPattern":
-      return pattern.properties.some((p) => patternDeclares(p.type === "RestElement" ? p.argument : p.value, name));
-    default: return false;
-  }
-}
-
-function isShadowed(ancestors, name) {
-  for (let i = ancestors.length - 2; i >= 1; i--) {
-    const node = ancestors[i];
-    if (
-      (node.type === "FunctionDeclaration" || node.type === "FunctionExpression" || node.type === "ArrowFunctionExpression") &&
-      node.params.some((p) => patternDeclares(p, name))
-    ) return true;
-    if (node.type === "CatchClause" && patternDeclares(node.param, name)) return true;
-    if (
-      node.type === "BlockStatement" &&
-      node.body.some((stmt) =>
-        (stmt.type === "VariableDeclaration" && stmt.declarations.some((d) => d.id.type === "Identifier" && d.id.name === name)) ||
-        (stmt.type === "FunctionDeclaration" && stmt.id && stmt.id.name === name)
-      )
-    ) return true;
-  }
-  return false;
-}
-
-export function renameAction(source, oldName, newName) {
-  const ast = parseSource(source);
-  const ms = new MagicString(source);
-  let foundActionDeclaration = false;
-  let targetDeclarator = null;
-
-  walk.simple(ast, {
-    CallExpression(node) {
-      if (node.callee.type !== "Identifier" || node.callee.name !== "action") return;
-      const nameArg = node.arguments[0];
-      if (!nameArg || nameArg.type !== "Literal" || nameArg.value !== oldName) return;
-      ms.overwrite(nameArg.start, nameArg.end, JSON.stringify(newName));
-      foundActionDeclaration = true;
-    },
-    VariableDeclarator(node) {
-      if (
-        node.id.type === "Identifier" && node.id.name === oldName &&
-        node.init && node.init.type === "CallExpression" &&
-        node.init.callee.type === "Identifier" && node.init.callee.name === "action" &&
-        node.init.arguments[0]?.type === "Literal" && node.init.arguments[0].value === oldName
-      ) {
-        targetDeclarator = node;
-      }
-    },
-  });
-
-  if (!foundActionDeclaration) {
-    throw new PatchError(`No action("${oldName}", ...) declaration found.`);
-  }
-  if (targetDeclarator) {
-    ms.overwrite(targetDeclarator.id.start, targetDeclarator.id.end, newName);
-  }
-
-  walk.ancestor(ast, {
-    Identifier(node, _state, ancestors) {
-      if (node.name !== oldName) return;
-      if (targetDeclarator && node === targetDeclarator.id) return;
-      if (isShadowed(ancestors, oldName)) return;
-      ms.overwrite(node.start, node.end, newName);
-    },
-  });
-
-  return ms.toString();
 }

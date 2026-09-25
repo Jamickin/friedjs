@@ -2,12 +2,22 @@ import esbuild from "esbuild";
 import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
+import { execSync } from "node:child_process";
 
 const DIST_DIR = "./dist";
 
 console.log("=========================================");
 console.log("📦 BUILDING FOR PRODUCTION WITH ESBUILD");
 console.log("=========================================\n");
+
+console.log("🔍 Running strict TypeScript validation...");
+try {
+  execSync("npx tsc -p jsconfig.json", { stdio: "inherit" });
+  console.log("✅ Static analysis passed.\n");
+} catch (error) {
+  console.error("❌ Build aborted due to type or syntax errors.");
+  process.exit(1);
+}
 
 if (!fs.existsSync(DIST_DIR)) {
   fs.mkdirSync(DIST_DIR, { recursive: true });

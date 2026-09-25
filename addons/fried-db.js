@@ -7,14 +7,14 @@ const idb = {
     return new Promise((resolve, reject) => {
       const req = indexedDB.open(dbName, 1);
       req.onupgradeneeded = (e) => {
-        const db = e.target.result;
+        const db = /** @type {any} */(e.target).result;
         stores.forEach(s => {
           if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: "id" });
         });
       };
       req.onsuccess = () => {
         this.db = req.result;
-        resolve();
+        resolve(undefined);
       };
       req.onerror = () => reject(req.error);
     });

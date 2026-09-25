@@ -27,18 +27,18 @@ let root, renderFn, pendingRender = false, renderHooks = [];
 
 const SVG_TAGS = new Set(["svg", "path", "circle", "g", "rect", "line", "polygon", "polyline", "text"]);
 
-export function mount(fn, el)  { renderFn = fn; root = el; render(); }
+export function mount(fn, el)  { renderFn = fn; root = el; render(undefined); }
 export function onRender(fn)   { renderHooks.push(fn); return () => { renderHooks = renderHooks.filter(h => h !== fn); }; }
-export function nextTick(fn)   { return fn ? queueMicrotask(fn) : new Promise(r => queueMicrotask(r)); }
+export function nextTick(fn)   { return fn ? queueMicrotask(fn) : new Promise(r => queueMicrotask(() => r(undefined))); }
 export function uid()          { return Math.random().toString(36).slice(2, 10); }
 
-function scheduleRender() {
+function scheduleRender(undefined) {
   if (pendingRender) return;
   pendingRender = true;
-  queueMicrotask(() => { pendingRender = false; render(); });
+  queueMicrotask(() => { pendingRender = false; render(undefined); });
 }
 
-export function render() {
+export function render(undefined) {
   if (!root || !renderFn) return;
   const t0 = t(), nextVnode = renderFn(), tTree = t() - t0;
   if (!nextVnode) { root.textContent = ""; return; }
@@ -97,7 +97,7 @@ export function cssVar(name, value) {
 // render pass cheap even for subtrees that end up entirely reused.
 
 function createDom(v) {
-  if (typeof v === "string" || typeof v === "number") return document.createTextNode(v);
+  if (typeof v === "string" || typeof v === "number") return document.createTextNode(String(v));
 
   const isSvg = SVG_TAGS.has(v.tag);
   const el = isSvg ? document.createElementNS("http://www.w3.org/2000/svg", v.tag) : document.createElement(v.tag);
@@ -338,7 +338,7 @@ export function state(initial) {
   let v = initial;
   return {
     get value() { return v; },
-    set value(next) { if (v === next) return; v = next; scheduleRender(); },
+    set value(next) { if (v === next) return; v = next; scheduleRender(undefined); },
   };
 }
 
@@ -367,7 +367,7 @@ export function derived(deps, fn) {
 }
 
 export function action(name, fn) {
-  const w = (...args) => { const r = fn(...args); scheduleRender(); return r; };
+  const w = (...args) => { const r = fn(...args); scheduleRender(undefined); return r; };
   w.friedActionName = name;
   return w;
 }

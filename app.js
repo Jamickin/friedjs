@@ -1,5 +1,5 @@
 import { mount, state, action, ui, uid, onRender, css, cssVar } from "./fried.js";
-import { createDatabase } from "./fried-db.js";
+import { createDatabase } from "./addons/fried-db.js";
 
 // -- Initialize Local Database --
 const db = createDatabase("FriedAppDB", ["users"]);
@@ -114,8 +114,8 @@ onRender(({ tTree, tHydrate, tTotal }) => {
   // Advanced Metrics Tracking
   timeSpentInFramework += tTotal;
   // 3. Memory Churn tracking
-  if (typeof performance !== "undefined" && performance.memory) {
-    const currentMemory = performance.memory.usedJSHeapSize;
+  if (typeof performance !== "undefined" && /** @type {any} */(performance).memory) {
+    const currentMemory = /** @type {any} */(performance).memory.usedJSHeapSize;
     if (previousMemoryTotal > 0) {
       if (currentMemory > previousMemoryTotal) {
         accumulatedChurn += (currentMemory - previousMemoryTotal);
@@ -186,11 +186,11 @@ function computeTelemetryStats() {
 function buildAuditPayload() {
   const label = typeof auditLabel !== "undefined" ? auditLabel.value : "baseline";
   const stats = computeTelemetryStats();
-  const mem = (typeof performance !== "undefined" && performance.memory)
+  const mem = (typeof performance !== "undefined" && /** @type {any} */(performance).memory)
     ? {
-        usedJsHeapMb: Number((performance.memory.usedJSHeapSize / 1024 / 1024).toFixed(2)),
-        totalJsHeapMb: Number((performance.memory.totalJSHeapSize / 1024 / 1024).toFixed(2)),
-        jsHeapLimitMb: Number((performance.memory.jsHeapSizeLimit / 1024 / 1024).toFixed(2)),
+        usedJsHeapMb: Number((/** @type {any} */(performance).memory.usedJSHeapSize / 1024 / 1024).toFixed(2)),
+        totalJsHeapMb: Number((/** @type {any} */(performance).memory.totalJSHeapSize / 1024 / 1024).toFixed(2)),
+        jsHeapLimitMb: Number((/** @type {any} */(performance).memory.jsHeapSizeLimit / 1024 / 1024).toFixed(2)),
       }
     : null;
 
@@ -199,7 +199,7 @@ function buildAuditPayload() {
     environment: {
       userAgent: navigator.userAgent,
       cores: navigator.hardwareConcurrency || "unknown",
-      deviceMemoryGb: navigator.deviceMemory || "unknown",
+      deviceMemoryGb: /** @type {any} */(navigator).deviceMemory || "unknown",
       url: window.location.href,
       screenResolution: `${window.screen.width}x${window.screen.height}`,
     },
@@ -601,7 +601,7 @@ const runBrowserTests = action("runBrowserTests", () => {
     btn.click();
     results.push({
       name: "ui() binds event handlers (e.g. onclick -> addEventListener('click'))",
-      passed: clicked === true,
+      passed: clicked,
       detail: `Button simulated click triggered: ${clicked}`,
     });
   } catch (err) {
@@ -690,7 +690,7 @@ ui("div", { key: "bench-metrics-grid", class: "grid grid-4", style: "margin-bott
     ]),
     
     // Advanced Hardware Telemetry Grid
-    ui("div", { key: "hw-metrics-grid", class: "grid grid-4", style: "margin-bottom: 1.5rem;", "class": "grid grid-5" }, [
+    ui("div", { key: "hw-metrics-grid", class: "grid grid-5", style: "margin-bottom: 1.5rem;" }, [
       ui("div", { key: "hw-cpu", class: "metric-card" }, [
         ui("div", { key: "hw-val-cpu", class: "metric-val", style: "color: #3b82f6" }, [`${cpuLoadPct.value}%`]),
         ui("div", { key: "hw-lbl-cpu", class: "metric-label" }, ["Main Thread CPU Load"]),
@@ -705,7 +705,7 @@ ui("div", { key: "bench-metrics-grid", class: "grid grid-4", style: "margin-bott
       ]),
       ui("div", { key: "hw-heap", class: "metric-card" }, [
         ui("div", { key: "hw-val-heap", class: "metric-val" }, [
-          typeof performance !== "undefined" && performance.memory ? `${(performance.memory.usedJSHeapSize / 1024 / 1024).toFixed(0)} MB` : "N/A"
+          typeof performance !== "undefined" && /** @type {any} */(performance).memory ? `${(/** @type {any} */(performance).memory.usedJSHeapSize / 1024 / 1024).toFixed(0)} MB` : "N/A"
         ]),
         ui("div", { key: "hw-lbl-heap", class: "metric-label" }, ["Active JS Heap Size"]),
       ]),
@@ -946,10 +946,10 @@ function renderArchitectureCard() {
 
 function renderAuditPanel() {
   const stats = computeTelemetryStats();
-  const mem = (typeof performance !== "undefined" && performance.memory)
+  const mem = (typeof performance !== "undefined" && /** @type {any} */(performance).memory)
     ? {
-        used: (performance.memory.usedJSHeapSize / 1024 / 1024).toFixed(1),
-        total: (performance.memory.totalJSHeapSize / 1024 / 1024).toFixed(1),
+        used: (/** @type {any} */(performance).memory.usedJSHeapSize / 1024 / 1024).toFixed(1),
+        total: (/** @type {any} */(performance).memory.totalJSHeapSize / 1024 / 1024).toFixed(1),
       }
     : null;
 

@@ -17,6 +17,7 @@ read -p "Include local IndexedDB Database? (y/n): " INC_DB
 read -p "Include Virtual Scroller (for 100k+ lists)? (y/n): " INC_VIRTUAL
 read -p "Include Hash Router? (y/n): " INC_ROUTER
 read -p "Include AI Patcher tooling? (y/n): " INC_AI
+read -p "Include Shopify Theme AI tooling? (y/n): " INC_SHOPIFY
 echo ""
 
 echo "📄 Generating index.html..."
@@ -126,25 +127,32 @@ if [[ "$INC_AI" =~ ^[Yy]$ ]]; then
     echo "➕ Downloading AI Tooling..."
     curl -sL "https://raw.githubusercontent.com/Jamickin/friedjs/main/patcher.js" -o tooling/patcher.js
     
-    echo "📄 Generating AI_INSTRUCTIONS.md..."
-    cat << 'AI_EOF' > AI_INSTRUCTIONS.md
-# Fried.js AI Instructions
+    echo "📄 Downloading AI Instructions and scripts..."
+    curl -sL "https://raw.githubusercontent.com/Jamickin/friedjs/main/CLAUDE.md" -o CLAUDE.md
+    curl -sL "https://raw.githubusercontent.com/Jamickin/friedjs/main/tooling/check-keys.mjs" -o tooling/check-keys.mjs
+    curl -sL "https://raw.githubusercontent.com/Jamickin/friedjs/main/tooling/fried-map.mjs" -o tooling/fried-map.mjs
+fi
 
-You are working in **Fried.js**, a zero-build-step, Virtual-DOM UI framework. 
+if [[ "$INC_SHOPIFY" =~ ^[Yy]$ ]]; then
+    echo "🛍️ Downloading Shopify AI Tooling..."
+    mkdir -p addons/shopify
+    curl -sL "https://raw.githubusercontent.com/Jamickin/friedjs/main/addons/shopify/shopify-injector.js" -o addons/shopify/shopify-injector.js
+    curl -sL "https://raw.githubusercontent.com/Jamickin/friedjs/main/addons/shopify/shopify-patcher.js" -o addons/shopify/shopify-patcher.js
+    curl -sL "https://raw.githubusercontent.com/Jamickin/friedjs/main/addons/shopify/shopify-map.js" -o addons/shopify/shopify-map.js
+    curl -sL "https://raw.githubusercontent.com/Jamickin/friedjs/main/addons/shopify/CLAUDE-SHOPIFY.md" -o addons/shopify/CLAUDE-SHOPIFY.md
+    curl -sL "https://raw.githubusercontent.com/Jamickin/friedjs/main/addons/shopify/THEME-DB-TEMPLATE.md" -o addons/shopify/THEME-DB-TEMPLATE.md
+    curl -sL "https://raw.githubusercontent.com/Jamickin/friedjs/main/addons/shopify/ai-setup.js" -o addons/shopify/ai-setup.js
+    
+    echo "📄 Generating Master AI Knowledge Database..."
+    cp addons/shopify/THEME-DB-TEMPLATE.md SHOPIFY-MASTER-KNOWLEDGE.md
+    
+    # Append instructions for the AI
+    cat << 'KNOWLEDGE_EOF' >> SHOPIFY-MASTER-KNOWLEDGE.md
 
-## 1. Core Architecture
-- **No React/Svelte/JSX**: Use raw JS.
-- **UI**: Return plain objects via `ui(tag, props, children)`.
-- **State**: `const val = state(initial);` (Read/write via `val.value`).
-- **Actions**: Wrap state mutations in `action("name", () => { ... })`.
-- **CSS**: Co-locate using `const styles = css({ title: "color: red;" })`.
-
-## 2. Modifying Code (CRITICAL)
-- **Do NOT overwrite entire files** for UI changes.
-- You MUST use `tooling/patcher.js` to modify AST safely.
-- **Patcher Ops**: `setProp`, `setChildText`, `addChild`, `addStatementAfter`, `removeChild`, `replaceChild`, `removeStatement`, `renameSymbol`.
-- Keys must be absolutely unique among siblings.
-AI_EOF
+---
+# 🧠 AI Agent Directives
+**CRITICAL**: You must read this file before making any changes. Every time you learn a new convention about this Shopify theme, you MUST append it to this file so future agents (or your future self) retain the knowledge.
+KNOWLEDGE_EOF
 fi
 
 # Clean up empty directories if modules weren't included
