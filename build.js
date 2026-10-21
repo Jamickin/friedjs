@@ -11,8 +11,15 @@ console.log("📦 BUILDING FOR PRODUCTION WITH ESBUILD");
 console.log("=========================================\n");
 
 console.log("🔍 Running strict TypeScript validation...");
+// Use the project's own typescript (a devDependency). `npx tsc` without it
+// installed fetches an unrelated "tsc" package and fails confusingly.
+const TSC = path.join("node_modules", "typescript", "bin", "tsc");
+if (!fs.existsSync(TSC)) {
+  console.error(`❌ Build aborted: ${TSC} not found. Run \`npm install\` to install the typescript devDependency.`);
+  process.exit(1);
+}
 try {
-  execSync("npx tsc -p jsconfig.json", { stdio: "inherit" });
+  execSync(`"${process.execPath}" "${TSC}" -p jsconfig.json`, { stdio: "inherit" });
   console.log("✅ Static analysis passed.\n");
 } catch (error) {
   console.error("❌ Build aborted due to type or syntax errors.");

@@ -37,6 +37,14 @@ changed. See `evolution/EVOLUTION.md` entry 1.
   `patcher.js` is now a re-export stub, so `import ... from "./patcher.js"`
   still works.
 - `create-fried-app.sh` downloads the patcher from `tooling/patcher.js`.
+
+### Fixed
+- `npm run build` failed at 0.1.0: its type check (`tsc -p jsconfig.json`)
+  reported 17 errors, all in the Node-only `addons/shopify` scripts.
+  `jsconfig.json` now excludes `addons/shopify` and `tests`, and
+  `build.js` runs the project's own `node_modules/typescript` instead of
+  `npx tsc` (which, without typescript installed, fetched an unrelated
+  `tsc` package), with a clear "run npm install" error when it's missing.
 - Docs: replaced dead `src/`, `scripts/` and missing-test-file paths with
   the real ones, fixed `npm run serve` (no such script) to `npm start`,
   and corrected the claim that the repo has no app in it.

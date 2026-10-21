@@ -171,3 +171,11 @@ exports `store`, `derived`, `render`, the `ref` prop and
   stress create 10,000 rows 4.00-4.15 (4.3); append 1,000 2.10-2.18 (2.2).
 - `npm run map -- app.js` and `npm run check-keys -- app.js` print the
   index and addressability report for the dashboard app.
+- `npm run build` was already failing at commit `0864320`: `tsc -p
+  jsconfig.json` reported 17 errors, all in the Node-only `addons/shopify`
+  scripts. With `addons/shopify` excluded in `jsconfig.json` and `build.js`
+  calling `node_modules/typescript/bin/tsc` directly, the full build
+  passes (type check clean, JS bundle 37.50 KB / 13.10 KB gzip) in a copy
+  of this tree with typescript installed. In an install without the
+  typescript devDependency it now stops with "run npm install" instead of
+  npx's unrelated-package error.
