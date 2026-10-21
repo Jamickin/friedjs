@@ -194,19 +194,54 @@ real length.
 ## fried-router.js — optional hash router
 
 ```js
-import { currentRoute, navigate, router } from "./addons/fried-router.js";
+import { currentRoute, navigate, router, matchRoute, parseRoute } from "./addons/fried-router.js";
 ```
 
 Browser only: it reads `window.location` and listens for `hashchange` as
 soon as it's imported. Uses `#/path` hash routes, so it works on any
-static file server.
+static file server. (In Node, e.g. a test, define a small
+`globalThis.window = { location: { hash: "" }, addEventListener() {} }`
+before importing it; `tests/router-params.test.js` does.)
 
 - `currentRoute` -> a `state` holding the current path (the hash without
-  `#`, `"/"` when empty). Updated on back/forward.
+  `#`, `"/"` when empty), query string included. Updated on back/forward.
 - `navigate(path)` -> an `action` that sets the hash and `currentRoute`.
-- `router(routes)` -> calls `routes[currentRoute.value]()` (or
-  `routes["*"]()` when no route matches) and returns its result, or
-  `null` when neither exists. Call it inside your render function.
+  `path` may carry a query string: `navigate("/done?agent=codex")`.
+- `router(routes)` -> finds the view for `currentRoute.value` with
+  `matchRoute`, calls it with one argument `{ params, query, path }` and
+  returns its result, or `null` when nothing matches and there is no
+  `"*"`. Call it inside your render function. A view that takes no
+  argument works the same as before 0.3.0.
+- `matchRoute(routes, path)` -> `{ view, params, query, path, pattern }`
+  or `null`. Pure: no DOM, no state; use it in tests, or to pick a title
+  or a tab for the current route. Resolution order:
+  1. a key equal to the whole `path` (query included), exactly as before 0.3.0;
+  2. a key equal to the path without its query;
+  3. keys with `:name` segments, compared segment by segment (the pattern
+     text is never turned into a regex). A `:name` segment matches one
+     non-empty segment, URL-decoded (`%2F` becomes `/`; a bad escape is
+     kept as written). The pattern with the most literal segments wins;
+     ties go to the route declared first. A trailing slash on the path or
+     the key is ignored;
+  4. `"*"`.
+- `parseRoute(path)` -> `{ path, query }`. `query` is a plain object of
+  the part after `?`: keys and values URL-decoded (`+` is a space), the
+  first value of a repeated key wins, a bare `flag` is `""`.
+
+```js
+const routes = {
+  "/": () => ui("h1", { key: "home" }, ["Home"]),
+  "/plans/new": () => ui("h1", { key: "newPlan" }, ["New plan"]), // beats /plans/:id
+  "/plans/:id": ({ params, query }) => ui("h1", { key: "plan" }, ["Plan " + params.id + " tab " + (query.tab || "log")]),
+  "*": ({ path }) => ui("p", { key: "notFound" }, ["No page at " + path]),
+};
+mount(() => router(routes), document.getElementById("app"));
+
+matchRoute(routes, "/plans/p%201?tab=diff");
+// -> { view, params: { id: "p 1" }, query: { tab: "diff" }, path: "/plans/p%201", pattern: "/plans/:id" }
+parseRoute("/done?agent=codex&day=today");
+// -> { path: "/done", query: { agent: "codex", day: "today" } }
+```
 
 ## Patch API (tooling/patcher.js), for making a small change afterward
 

@@ -365,3 +365,25 @@ was for `setProp`; `setCssRule` throws a `PatchError` immediately if
 silently splice wrong. `tooling/fried-map.mjs`'s new `CSS:` line reports
 which top-level `const`s are `css({...})` calls and which rule names each
 one currently defines.
+
+## `router(routes)` matched exact paths only -- FIXED in 0.3.0
+
+Up to 0.2.0, `addons/fried-router.js`'s `router(routes)` looked up
+`routes[currentRoute.value]` and nothing else: no `:param` segments, and a
+query string (`#/done?agent=codex`) or a trailing slash sent the path to
+`"*"`. Recorded as friction by the Orchestra dashboard
+(`evolution/friction.jsonl` line 1): want "Match parameter routes such as
+/musicians/:id and /plans/:id", error "fried-router matches exact paths
+only". Its workaround was its own matcher (dashboard/lib/routes.js in the
+Orchestra repo, about 3.5 KB: a pattern compiler, a query parser, decoding, fallback), using
+fried-router only for `currentRoute` and `navigate`.
+
+Fixed additively in 0.3.0: route keys may contain `:name` segments, the
+view receives `{ params, query, path }`, and `matchRoute(routes, path)` /
+`parseRoute(path)` expose the matcher on its own (see
+`docs/framework-api.md`). A key equal to the whole path still wins first,
+so every exact route and the `"*"` fallback resolve as before; the only
+paths that resolve differently are ones that used to fall to `"*"` because
+of a query string or a trailing slash. Verified by
+`tests/router-params.test.js`; why and the gate numbers are in
+`evolution/EVOLUTION.md` entry 3.

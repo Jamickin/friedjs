@@ -59,7 +59,10 @@ what came from where and why, and it's short.
   (`npm run map -- path/to/app.js`), so you know what's there to target
   before reaching for the patcher instead of reading the whole file.
 - `addons/fried-router.js` -- optional: a tiny hash router
-  (`currentRoute`, `navigate`, `router`), browser only.
+  (`currentRoute`, `navigate`, `router`, `matchRoute`, `parseRoute`),
+  browser only. Routes may use `:param` segments and a query string
+  (`"/plans/:id"`, `#/done?agent=codex`); the view gets
+  `{ params, query, path }`.
 - `patcher.js` (repo root) -- a one-line re-export of
   `tooling/patcher.js`, kept so older imports keep working. Import from
   `tooling/patcher.js` in new code.

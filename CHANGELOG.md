@@ -7,11 +7,41 @@ equal `package.json`'s `version` and `fried.js`'s `VERSION` export
 (`tests/version.test.js` checks it). Why each change was made is in
 `evolution/EVOLUTION.md`.
 
-## [Unreleased]
+## [0.3.0] - 2026-10-22
+
+Phase F3a: `addons/fried-router.js` matches `:param` routes and a query
+string, from the first real friction line (`evolution/friction.jsonl`
+line 1). Additive: every exact-path route and the `"*"` fallback resolve
+as before. See `evolution/EVOLUTION.md` entry 3. This release also ships
+the phase F2 tooling listed below it, which was waiting under Unreleased
+for a version bump.
+
+### Added
+- `router(routes)` route keys may contain `:name` segments
+  (`"/musicians/:id"`, `"/plans/:id/tasks/:taskId"`), matched segment by
+  segment (no regex built from pattern text). More literal segments win;
+  ties go to the route declared first. Trailing slashes are tolerated.
+- The view is called with one argument, `{ params, query, path }`: params
+  and query values are URL-decoded (a bad escape is kept as written), the
+  query's first value wins, `path` has no query. Views that take no
+  argument keep working.
+- `matchRoute(routes, path)` -> `{ view, params, query, path, pattern }`
+  or `null`: the matcher on its own, usable outside rendering.
+- `parseRoute(path)` -> `{ path, query }`.
+- `tests/router-params.test.js` (11 tests).
+
+### Changed
+- A path with a query string (`"/done?x=1"`) or a trailing slash
+  (`"/about/"`) now resolves to its route (`"/done"`, `"/about"`) instead of
+  `"*"`. A route key equal to the whole path, query included, still wins
+  first, so existing tables resolve exactly as before.
+- The `"*"` view now also receives `{ params: {}, query, path }`.
+
+## [Unreleased, shipped in 0.3.0]
 
 Phase F2 (friedjs half): FriedJS records what makes AIs struggle with it.
 Intended as 0.2.1; kept under Unreleased because the version stamp lives in
-`fried.js`, which this phase does not touch. No runtime behaviour changed.
+`fried.js`, which that phase did not touch. No runtime behaviour changed.
 See `evolution/EVOLUTION.md` entry 2.
 
 ### Added
