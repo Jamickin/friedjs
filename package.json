@@ -11,7 +11,9 @@
     "build": "node build.js",
     "serve:prod": "node server-prod.js",
     "map": "node tooling/fried-map.mjs",
-    "check-keys": "node tooling/check-keys.mjs"
+    "check-keys": "node tooling/check-keys.mjs",
+    "friction": "node tooling/friction-log.mjs",
+    "digest": "node tooling/friction-digest.mjs"
   },
   "dependencies": {
     "acorn": "^8.11.0",
