@@ -125,7 +125,7 @@ fi
 
 if [[ "$INC_AI" =~ ^[Yy]$ ]]; then
     echo "➕ Downloading AI Tooling..."
-    curl -sL "https://raw.githubusercontent.com/Jamickin/friedjs/main/patcher.js" -o tooling/patcher.js
+    curl -sL "https://raw.githubusercontent.com/Jamickin/friedjs/main/tooling/patcher.js" -o tooling/patcher.js
     
     echo "📄 Downloading AI Instructions and scripts..."
     curl -sL "https://raw.githubusercontent.com/Jamickin/friedjs/main/CLAUDE.md" -o CLAUDE.md

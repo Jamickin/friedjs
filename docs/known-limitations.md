@@ -5,10 +5,19 @@ patcher.js, not assumed ones. Keep it updated as new ones are found -- the
 point of an empirical project is to write down what actually happened
 rather than what should happen in theory.
 
-`src/fried.js` in this project is a merge of two independently-evolved
+`fried.js` in this project is a merge of two independently-evolved
 iterations -- see `docs/MERGE.md` for exactly what came from where. Every
 entry below still applies to the merged runtime/patcher unless its own
 text says otherwise.
+
+**Historical verification files.** Some entries below cite the scripts
+that verified them in the pre-merge repos: `tests/browser-verify.mjs`,
+`verify.mjs`, `tests/patcher.test.js` and the token-efficiency
+benchmark's results file. None of them were brought into this repo. The
+checks that run here today are `npm test` (`tests/test.js` and every
+`tests/*.test.js`), `node stress.js` and `node benchmark.js`. Treat those
+citations as a record of how a fix was verified at the time, not as files
+you can run.
 
 ## Late-added event handler never actually attached -- fixed by the merge
 
@@ -126,7 +135,7 @@ faster only moves the ceiling, it doesn't remove it, because the cost is
 in *building* 50,000 new elements every render, not just comparing them.
 
 The fix isn't a reconciler change -- it's not creating that many real DOM
-nodes per render in the first place. `src/fried-virtual.js` (optional
+nodes per render in the first place. `addons/fried-virtual.js` (optional
 module, same precedent as `fried-db.js`) renders only the rows inside the
 current scroll viewport. Same 50,000-item scale, same unrelated-tick
 scenario, virtualized: **0.4ms per render, steady 60fps** -- because the
@@ -196,7 +205,7 @@ What's still true: an individual *rendered instance* of a list item (item
 #47, specifically) is not and cannot be addressable this way -- there's no
 static string "item 47" to search for, only a runtime value. Give a static
 key to anything that isn't a per-item template wrapper if you want to
-patch it later; use `scripts/check-keys.mjs` to see which `ui(...)` call
+patch it later; use `tooling/check-keys.mjs` to see which `ui(...)` call
 sites in a file currently qualify.
 
 What's no longer true: the *template itself* -- the one place in source
@@ -211,8 +220,8 @@ ops -- `addTemplateChild(source, fnName, newChild)` and
 `setTemplateProp(source, fnName, propName, value)` -- that find the
 function, then the single `ui(...)` call it `return`s, and patch that,
 the same targeted single-location edit as every other op here, just
-addressed by function name instead of `key`. `scripts/check-keys.mjs` and
-`scripts/fried-map.mjs` (the `T:` line) both report which named functions
+addressed by function name instead of `key`. `tooling/check-keys.mjs` and
+`tooling/fried-map.mjs` (the `T:` line) both report which named functions
 in a file currently qualify. See CLAUDE.md's "Named render templates"
 convention.
 
@@ -333,7 +342,7 @@ addressing scheme is flat (by function name), not tree-shaped, so nesting
 was never actually a problem for it. Verified with a dedicated test
 (`tests/patcher.test.js`) patching both the outer and inner template of a
 nested pair and confirming each patch lands only in its own function.
-`scripts/fried-map.mjs`'s `T:` line now also reports nesting inline
+`tooling/fried-map.mjs`'s `T:` line now also reports nesting inline
 (`renderCategory(> renderItem)`) when it's present, purely so an AI
 doesn't have to read the source to find out the shape -- it doesn't change
 what's addressable.
@@ -353,6 +362,6 @@ text -- a CSS declaration is always a string at the `css()` call site to
 begin with, so there's no raw-source landmine to close here the way there
 was for `setProp`; `setCssRule` throws a `PatchError` immediately if
 `declText` isn't a string, rather than accepting something that would
-silently splice wrong. `scripts/fried-map.mjs`'s new `CSS:` line reports
+silently splice wrong. `tooling/fried-map.mjs`'s new `CSS:` line reports
 which top-level `const`s are `css({...})` calls and which rule names each
 one currently defines.

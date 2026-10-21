@@ -3,7 +3,7 @@
 // patcher.js (a static string `key`) versus not, so you can verify a file
 // is actually patchable before relying on patcher.js against it.
 //
-// Usage: node scripts/check-keys.mjs [path/to/app.js]   (defaults to app.js)
+// Usage: node tooling/check-keys.mjs [path/to/app.js]   (defaults to app.js)
 import { parse } from "acorn";
 import * as walk from "acorn-walk";
 import fs from "fs";
@@ -30,7 +30,7 @@ for (const node of ast.body) {
 // `items.value.map(renderItem)` -- is a "template": not addressable by key
 // (its own wrapper's key is necessarily dynamic, for the runtime's
 // per-item identity tracking), but addressable by its function name via
-// addTemplateChild/setTemplateProp in src/patcher.js. Recorded by line so
+// addTemplateChild/setTemplateProp in tooling/patcher.js. Recorded by line so
 // it's reported alongside the dynamic-keyed root it wraps, below.
 const templates = new Map(); // fn name -> line of the ui() it returns, once found
 walk.simple(ast, {

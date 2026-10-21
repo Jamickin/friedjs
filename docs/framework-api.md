@@ -49,6 +49,10 @@ import { mount, state, action, ui, uid, css, cssVar, onRender } from "./fried.js
   mirrored onto the real element as a `data-fried-key` attribute once it's
   created, kept in sync across renders, handy for a test/devtools selector
   (`[data-fried-key="resetBtn"]`).
+  `props.ref`, if given, is a function called with the real element once
+  it's created; if a later render passes a different `ref` function, the
+  old one is called with `null` and the new one with the element, and
+  removing the prop calls the old one with `null`.
   `children` is an array of strings, numbers, or other `ui(...)` results.
 - `uid()` -> a random id string, handy for giving list items a stable key.
 - `mount(rootFn, element)` -> calls `rootFn()` to build the (virtual) tree,
@@ -74,9 +78,28 @@ import { mount, state, action, ui, uid, css, cssVar, onRender } from "./fried.js
   on `documentElement` directly. Setting one costs **zero re-renders** --
   it's a plain style write, not framework state.
 
-That's the whole API. Everything else in an app -- arithmetic, `.filter()`,
-`.map()`, `.sort()`, ternaries, template literals -- is just JavaScript the
-model already knows fluently, not something this framework has to define.
+That's the whole API you need to write an app. Everything else in an app --
+arithmetic, `.filter()`, `.map()`, `.sort()`, ternaries, template literals --
+is just JavaScript the model already knows fluently, not something this
+framework has to define.
+
+## More fried.js exports -- conveniences, not required
+
+`fried.js` also exports these. An app never needs them; they exist for
+convenience and tooling.
+
+- `store(initial)` -> an object with one reactive property per key of
+  `initial` (`s.count` reads, `s.count = 2` writes and re-renders), built
+  from one `state(...)` per key. Keys added later are not reactive.
+- `derived(deps, fn)` -> a read-only `{ value }` that calls `fn()` lazily
+  and caches the result until one of the `deps` (an array of `state`s)
+  has a different `.value` than at the last read.
+- `render()` -> runs one render of the mounted tree synchronously, right
+  now, instead of waiting for the batched re-render that `state`/`action`
+  schedule. Does nothing before `mount()`. Mostly for tests and
+  benchmarks.
+- `VERSION` -> the fried.js version string (e.g. `"0.2.0"`), kept equal to
+  `package.json`'s `version` and the top `CHANGELOG.md` entry.
 
 ## fried-db.js — optional persisted, reactive collections
 
@@ -168,7 +191,24 @@ state change elsewhere in the tree drops from ~580-800ms per render and
 being rebuilt each time stays viewport-sized regardless of the array's
 real length.
 
-## Patch API (src/patcher.js), for making a small change afterward
+## fried-router.js — optional hash router
+
+```js
+import { currentRoute, navigate, router } from "./addons/fried-router.js";
+```
+
+Browser only: it reads `window.location` and listens for `hashchange` as
+soon as it's imported. Uses `#/path` hash routes, so it works on any
+static file server.
+
+- `currentRoute` -> a `state` holding the current path (the hash without
+  `#`, `"/"` when empty). Updated on back/forward.
+- `navigate(path)` -> an `action` that sets the hash and `currentRoute`.
+- `router(routes)` -> calls `routes[currentRoute.value]()` (or
+  `routes["*"]()` when no route matches) and returns its result, or
+  `null` when neither exists. Call it inside your render function.
+
+## Patch API (tooling/patcher.js), for making a small change afterward
 
 - `setProp(source, key, propName, newValueSource, within?)` -- set or add a
   prop on the `ui(...)` call with this `key`. `propName` may be a plain
@@ -271,7 +311,7 @@ real length.
   special handling here -- `addTemplateChild`/`setTemplateProp` (and their
   `...Value` counterparts) address the outer and inner template
   independently by their own function names regardless of nesting, since
-  the addressing scheme is flat, not tree-shaped. `scripts/fried-map.mjs`'s
+  the addressing scheme is flat, not tree-shaped. `tooling/fried-map.mjs`'s
   `T:` line reports nesting when it's present, purely for visibility.
 - `setCssRule(source, varName, ruleName, declText)` -- set or add one
   rule's declaration on a top-level `const <varName> = css({...})` call.
@@ -343,7 +383,7 @@ sites in a file currently have a static, patcher-addressable `key`, and
 which named top-level functions currently qualify as `addTemplateChild`/
 `setTemplateProp`-addressable templates.
 
-## fried.map (scripts/fried-map.mjs) -- what to target before you patch
+## fried.map (tooling/fried-map.mjs) -- what to target before you patch
 
 `npm run map -- path/to/app.js` prints a compact, machine-readable index
 of everything in the file that a patch could address, instead of making
@@ -393,11 +433,19 @@ isn't listed here, since `within` can't fix that one, a rename is the
 only real fix.
 
 `buildFriedMap(source)` and `formatFriedMap(map)` are also exported from
-`scripts/fried-map.mjs` for programmatic use (what `tests/fried-map.test.js`
-exercises directly) -- the CLI above is a thin wrapper over them.
+`tooling/fried-map.mjs` for programmatic use -- the CLI above is a thin
+wrapper over them.
 
-Run `npm test` to run `tests/patcher.test.js`, `tests/realistic.test.js`,
-`tests/fried-map.test.js`, and `tests/diagnostics.test.js` -- real
-assertions against real output (re-parsed where relevant, not just
-diffed). Keep these passing when touching `patcher.js` or
-`fried-map.mjs`; add a case to them before trusting a new edge case.
+## Tests and checks
+
+`npm test` runs `tests/test.js` and every `tests/*.test.js` file through
+`node --test` (via `tests/run.mjs`), including the runtime and patcher
+unit tests in `tests/test.js`, `tests/docs-truth.test.js` (every path,
+npm script, patcher op and API name these docs mention really exists)
+and `tests/version.test.js`. `node stress.js` is the runtime's
+correctness-at-scale suite and `node benchmark.js` the timing benchmark;
+compare their numbers against `evolution/baseline.md`. Keep all of them
+passing when touching `fried.js`, `tooling/patcher.js` or
+`tooling/fried-map.mjs`, and add a case before trusting a new edge case.
+There are no dedicated tests for `tooling/fried-map.mjs` or the
+diagnostics messages yet.

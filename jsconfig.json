@@ -19,8 +19,9 @@
     "node_modules",
     "dist",
     "tooling",
+    "tests",
+    "addons/shopify",
     "patcher.js",
-    "test.js",
     "stress.js",
     "benchmark.js"
   ]
