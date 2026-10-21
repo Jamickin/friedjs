@@ -179,3 +179,37 @@ exports `store`, `derived`, `render`, the `ref` prop and
   of this tree with typescript installed. In an install without the
   typescript devDependency it now stops with "run npm install" instead of
   npx's unrelated-package error.
+
+## Unreleased (phase F2, friedjs half): friction gets recorded -- what changed, how verified
+
+**What changed.** New `tooling/friction-log.mjs` (validated, capped,
+append-only writer for `evolution/friction.jsonl`, rotation past 2 MB,
+`readFriction`, CLI as `npm run friction`) and `tooling/friction-digest.mjs`
+(deterministic ranked markdown report, `npm run digest`). In
+`tooling/patcher.js` the 17 ops are now plain functions, exported through
+`instrument(op, impl)` wrappers under the same names and arity: with
+`FRIED_FRICTION_LOG` unset the wrapper reads that env var and calls the op
+(nothing else runs); set, it also appends one line per public call. Ops
+calling ops internally (`patch`'s steps, `setPropValue` -> `setProp`,
+`patch` -> `validate`) use the unwrapped functions. `friction-log.mjs` has
+no static `node:` imports (it uses `process.getBuiltinModule` when it
+writes), so importing the patcher pulls in no new Node built-ins.
+`fried.js` was not touched; the CHANGELOG entry is under Unreleased so the
+version stamp stays 0.2.0.
+
+**How it was verified.**
+
+- `npm test`: 51 tests, 0 failures (28 before, plus 12 friction-log, 5
+  patcher-instrumentation, 6 digest), `tests/docs-truth.test.js` included.
+- `tests/patcher-instrumentation.test.js` runs 11 real calls (ok and
+  failing, including `patch` and `validate`) with the env var unset, then
+  set, and asserts identical return values, error messages and error
+  classes; that no file is written when unset; one line per call when set;
+  and that the log contains neither a marker string planted in the source
+  nor one planted in an argument value.
+- `node stress.js` x3: 43/43 each; create 10,000 rows median 4.04 ms
+  (baseline 4.3), append 1,000 median 1.99 ms (range 1.96-2.24; 2.2).
+- `node benchmark.js` x3, medians (baseline): 1,000 cards 2.34 ms (2.27);
+  5,000 8.27 (8.24); 20,000 25.12 (24.7); 50,000 65.18 (61.6); 100,000
+  state updates 23.02 (25.2); 600 patcher cycles 320.00 (309.5, +3%;
+  this is the gate for the wrapper's cost). All within 25%.

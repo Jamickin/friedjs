@@ -76,7 +76,11 @@ what came from where and why, and it's short.
   `package.json`'s version (`tests/version.test.js` checks it).
 - `evolution/` -- the log of why FriedJS changed (`evolution/EVOLUTION.md`),
   the performance baseline, and `evolution/friction.jsonl` for recording
-  friction an AI session hits (format in `evolution/README.md`).
+  friction an AI session hits (format in `evolution/README.md`; see
+  "Friction" below).
+- `tooling/friction-log.mjs` and `tooling/friction-digest.mjs` -- the
+  friction writer/CLI (`npm run friction`) and the ranked report
+  (`npm run digest`).
 
 `app.js`, `index.html`, `style.css` and `server.js` in this repo are the
 fried.js tester and telemetry dashboard, not a starting point for your
@@ -166,6 +170,27 @@ the conveniences `store`, `derived`, `render` and `VERSION`; see
 `docs/framework-api.md`.) Everything else -- lists,
 conditionals, event handling, timers -- is just plain JavaScript, exactly
 as you'd already write it.
+
+## Friction
+
+When FriedJS gets in your way (a patcher op that can't express the edit,
+an error that didn't help, an API you expected and had to work around),
+log one line before moving on. That log is the only evidence FriedJS
+changes on (`evolution/EVOLUTION.md`). One line per real obstacle, not
+per retry; a path in `--file`, never file contents, tokens or secrets.
+
+- In an Orchestra task, use the composer's `fried_friction` tool if you
+  have it.
+- Otherwise, the CLI: `npm run friction -- --want "<goal>" --tried "<what
+  you ran>" --error "<exact error>" --workaround "<what you did>" --file
+  <repo-relative path> --op <op>` (or `node tooling/friction-log.mjs`
+  with the same flags). It validates and caps the line and appends it to
+  `$FRIED_FRICTION_LOG`, or `evolution/friction.jsonl`.
+- Set `FRIED_FRICTION_LOG` (plus `FRIED_CONSUMER` / `FRIED_AGENT`) and
+  every `tooling/patcher.js` call also logs its outcome: op, ok / failed /
+  nearest-used, the error, the argument shape. Never source or values.
+- `npm run digest -- --since 7d` (`tooling/friction-digest.mjs`) ranks
+  what's been logged. Format and rules: `evolution/README.md`.
 
 ## Setup
 

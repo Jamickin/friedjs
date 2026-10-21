@@ -33,6 +33,10 @@ node benchmark.js
 npm run map -- app.js
 npm run check-keys -- app.js
 
+# Record friction (evolution/README.md), and rank what's been recorded
+npm run friction -- --want "..." --tried "..." --error "..."
+npm run digest -- --since 7d
+
 # Run the Telemetry Dashboard server (http://localhost:3000)
 npm start
 ```

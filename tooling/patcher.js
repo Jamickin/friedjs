@@ -10,6 +10,7 @@
 import { parse } from "acorn";
 import * as walk from "acorn-walk";
 import MagicString from "magic-string";
+import { appendFriction } from "./friction-log.mjs";
 
 export class PatchError extends Error {}
 
@@ -289,7 +290,7 @@ function computeInsertion(source, containerNode, items, newText) {
  * pass the template function's name when the same key string is used by
  * more than one `.map()` render template and an unscoped lookup would be
  * ambiguous (see findUiCallsByKey's comment and known-limitations.md). */
-export function setProp(source, key, propName, newValueSource, within) {
+function setProp(source, key, propName, newValueSource, within) {
   const ast = parseSource(source);
   const node = requireUiNode(ast, key, within);
   const propsArg = node.arguments[1];
@@ -357,7 +358,7 @@ function serializeDataValue(value) {
  * value is genuinely just data; fall back to `setProp` only when it has to
  * be an expression (a function, a reference to something in scope).
  */
-export function setPropValue(source, key, propName, dataValue, within) {
+function setPropValue(source, key, propName, dataValue, within) {
   return setProp(source, key, propName, serializeDataValue(dataValue), within);
 }
 
@@ -376,7 +377,7 @@ export function setPropValue(source, key, propName, dataValue, within) {
  * `within` (optional): see setProp's doc comment -- same cross-template
  * key-collision scoping applies here.
  */
-export function setChildText(source, key, oldText, newText, within) {
+function setChildText(source, key, oldText, newText, within) {
   const ast = parseSource(source);
   const node = requireUiNode(ast, key, within);
   const childrenArg = node.arguments[2];
@@ -427,7 +428,7 @@ export function setChildText(source, key, oldText, newText, within) {
  * `within` (optional): see setProp's doc comment -- same cross-template
  * key-collision scoping applies here.
  */
-export function addChild(source, key, newChildSource, within) {
+function addChild(source, key, newChildSource, within) {
   const ast = parseSource(source);
   const node = requireUiNode(ast, key, within);
   const childrenArg = node.arguments[2];
@@ -451,7 +452,7 @@ export function addChild(source, key, newChildSource, within) {
 }
 
 /** Inserts a new top-level statement right after `const <afterConstName> = ...`. */
-export function addStatementAfter(source, afterConstName, newStatementSource) {
+function addStatementAfter(source, afterConstName, newStatementSource) {
   const ast = parseSource(source);
   let target = null;
   for (const node of ast.body) {
@@ -538,7 +539,7 @@ function requireChildrenArray(node, key) {
  * `within` (optional): see setProp's doc comment -- same cross-template
  * key-collision scoping applies here.
  */
-export function removeChild(source, key, matcher, within) {
+function removeChild(source, key, matcher, within) {
   const ast = parseSource(source);
   const node = requireUiNode(ast, key, within);
   const childrenArg = requireChildrenArray(node, key);
@@ -562,7 +563,7 @@ export function removeChild(source, key, matcher, within) {
  * `within` (optional): see setProp's doc comment -- same cross-template
  * key-collision scoping applies here.
  */
-export function replaceChild(source, key, matcher, newChildSource, within) {
+function replaceChild(source, key, matcher, newChildSource, within) {
   const ast = parseSource(source);
   const node = requireUiNode(ast, key, within);
   const childrenArg = requireChildrenArray(node, key);
@@ -580,7 +581,7 @@ export function replaceChild(source, key, matcher, newChildSource, within) {
  * Removes a top-level `const <name> = ...` (or `function <name>(...) {}`)
  * statement entirely -- the delete-counterpart to addStatementAfter.
  */
-export function removeStatement(source, name) {
+function removeStatement(source, name) {
   const ast = parseSource(source);
   const idx = ast.body.findIndex((node) => {
     if (node.type === "VariableDeclaration") {
@@ -628,7 +629,7 @@ export function removeStatement(source, name) {
  * starts right after the `export` keyword (which stays put, untouched),
  * not at `export` itself.
  */
-export function replaceFunction(source, fnName, newFunctionSource) {
+function replaceFunction(source, fnName, newFunctionSource) {
   const ast = parseSource(source);
   const target = requireFunctionDecl(ast, fnName);
   const ms = new MagicString(source);
@@ -667,7 +668,7 @@ export function replaceFunction(source, fnName, newFunctionSource) {
  * directly into an inline array; rewrites a by-reference expression as
  * `[...(<expr>), newChild]`; adds a third argument if there isn't one).
  */
-export function addTemplateChild(source, fnName, newChildSource) {
+function addTemplateChild(source, fnName, newChildSource) {
   const ast = parseSource(source);
   const node = requireTemplateReturn(ast, fnName);
   const childrenArg = node.arguments[2];
@@ -700,7 +701,7 @@ export function addTemplateChild(source, fnName, newChildSource) {
  * overwriting it here would likely just break per-item identity tracking
  * rather than do anything the caller meant.
  */
-export function setTemplateProp(source, fnName, propName, newValueSource) {
+function setTemplateProp(source, fnName, propName, newValueSource) {
   if (propName === "key") {
     throw new PatchError(`refusing to set "key" via setTemplateProp -- it's the runtime's per-item identity expression, not a cosmetic prop; edit the template function directly if it genuinely needs to change`);
   }
@@ -727,7 +728,7 @@ export function setTemplateProp(source, fnName, propName, newValueSource) {
 /** Same as `setTemplateProp`, but takes an actual JS *value* instead of
  * raw source text -- see `setPropValue`'s doc comment for the reasoning
  * (the same raw-source landmine applies here). */
-export function setTemplatePropValue(source, fnName, propName, dataValue) {
+function setTemplatePropValue(source, fnName, propName, dataValue) {
   return setTemplateProp(source, fnName, propName, serializeDataValue(dataValue));
 }
 
@@ -789,7 +790,7 @@ function cssRuleNames(propsArg) {
  * `declText` is a plain CSS declaration string, always quoted correctly;
  * there's no raw-source form of this one (see the section comment above).
  */
-export function setCssRule(source, varName, ruleName, declText) {
+function setCssRule(source, varName, ruleName, declText) {
   if (typeof declText !== "string") {
     throw new PatchError(`setCssRule's declText must be a plain CSS declaration string, got ${typeof declText}`);
   }
@@ -809,7 +810,7 @@ export function setCssRule(source, varName, ruleName, declText) {
 
 /** Removes one rule from a top-level `const <varName> = css({...})` call --
  * the delete-counterpart to setCssRule. */
-export function removeCssRule(source, varName, ruleName) {
+function removeCssRule(source, varName, ruleName) {
   const ast = parseSource(source);
   const propsArg = requireCssCall(ast, varName);
   const idx = propsArg.properties.findIndex((p) => p.type === "Property" && propKeyMatches(p.key, ruleName));
@@ -859,7 +860,7 @@ const FRIED_RESERVED = new Set([
  * ...) since that would silently break every call site in the file
  * rather than the one thing actually being renamed.
  */
-export function renameSymbol(source, oldName, newName) {
+function renameSymbol(source, oldName, newName) {
   if (FRIED_RESERVED.has(oldName)) {
     throw new PatchError(`refusing to rename "${oldName}" -- it's a fried.js API name, not something a patch should touch`);
   }
@@ -954,7 +955,7 @@ const OPS = {
  * final result before returning it -- a batch that produces broken source
  * is not a successful patch.
  */
-export function patch(source, ops) {
+function patch(source, ops) {
   let current = source;
   ops.forEach((step, i) => {
     const fn = OPS[step.op];
@@ -984,7 +985,7 @@ export function patch(source, ops) {
  * `pos` are there for anything (an editor jump, an AI) that wants the
  * position as data instead of parsing it back out of English text.
  */
-export function validate(source) {
+function validate(source) {
   try {
     parseSource(source);
     return { ok: true };
@@ -996,3 +997,158 @@ export function validate(source) {
     return result;
   }
 }
+
+// -- Friction instrumentation ---------------------------------------------
+// Every op above is exported through a thin wrapper. With
+// FRIED_FRICTION_LOG unset (the normal case) the wrapper reads that one env
+// var and calls the op: same arguments, same return value, same thrown
+// error, no other code runs. With it set, each call also appends one line
+// to that file through tooling/friction-log.mjs (format in
+// evolution/README.md): the op, its outcome, the error message, and the
+// argument SHAPE (parameter names of the arguments passed, never their
+// values and never the source text). Ops called by other ops (patch's
+// steps, setPropValue's setProp, patch's validate) run unwrapped, so one
+// public call is one line.
+//
+// outcome is "ok", "failed" (threw, or validate returned ok:false), or
+// "nearest-used": best effort, the call succeeded and its key/name
+// argument (2nd or 3rd) is one of the "nearest:" suggestions in the error
+// of the last failed call of the same op in this process within 60 s --
+// i.e. the suggestion was taken. Only the last failure per op is
+// remembered, in memory.
+
+const FRICTION_PARAMS = {
+  setProp: ["key", "prop", "value", "within"],
+  setPropValue: ["key", "prop", "value", "within"],
+  setChildText: ["key", "oldText", "newText", "within"],
+  addChild: ["key", "child", "within"],
+  addStatementAfter: ["afterConst", "statement"],
+  removeChild: ["key", "matcher", "within"],
+  replaceChild: ["key", "matcher", "child", "within"],
+  removeStatement: ["name"],
+  replaceFunction: ["fnName", "function"],
+  addTemplateChild: ["fnName", "child"],
+  setTemplateProp: ["fnName", "prop", "value"],
+  setTemplatePropValue: ["fnName", "prop", "value"],
+  setCssRule: ["varName", "rule", "decl"],
+  removeCssRule: ["varName", "rule"],
+  renameSymbol: ["oldName", "newName"],
+  patch: ["ops"],
+  validate: [],
+};
+
+const NEAREST_WINDOW_MS = 60_000;
+const lastFailure = new Map();
+
+function frictionShape(op, args) {
+  if (op === "patch") {
+    const steps = Array.isArray(args[1]) ? args[1] : [];
+    const names = steps.map((s) => (s && Object.hasOwn(OPS, s.op) ? s.op : "?"));
+    return `patch(ops:${names.join(",")})`.slice(0, 300);
+  }
+  const names = FRICTION_PARAMS[op].filter((_, i) => args[i + 1] !== undefined);
+  return `${op}(${names.join(",")})`;
+}
+
+function nearestSuggestions(message) {
+  const m = /-- nearest: (.*)$/.exec(message);
+  if (!m) return [];
+  return [...m[1].matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((q) => {
+    try { return JSON.parse(`"${q[1]}"`); } catch { return q[1]; }
+  });
+}
+
+function logFriction(file, op, args, outcome, error) {
+  const env = process.env;
+  appendFriction({
+    consumer: env.FRIED_CONSUMER || "unknown",
+    agent: env.FRIED_AGENT || "unknown",
+    want: "patcher op",
+    tried: frictionShape(op, args),
+    error: error == null ? null : String(error).slice(0, 500),
+    workaround: null,
+    file: null,
+    op,
+    source: "patcher",
+    outcome,
+  }, { file });
+}
+
+function callLogged(file, op, impl, args) {
+  let result;
+  try {
+    result = impl(...args);
+  } catch (err) {
+    const message = err && err.message !== undefined ? String(err.message) : String(err);
+    const nearest = nearestSuggestions(message);
+    if (nearest.length) lastFailure.set(op, { at: Date.now(), nearest });
+    else lastFailure.delete(op);
+    logFriction(file, op, args, "failed", message);
+    throw err;
+  }
+  if (op === "validate" && result && result.ok === false) {
+    logFriction(file, op, args, "failed", result.error);
+    return result;
+  }
+  let outcome = "ok";
+  const prev = lastFailure.get(op);
+  if (prev) {
+    lastFailure.delete(op);
+    if (Date.now() - prev.at <= NEAREST_WINDOW_MS
+        && [args[1], args[2]].some((a) => typeof a === "string" && prev.nearest.includes(a))) {
+      outcome = "nearest-used";
+    }
+  }
+  logFriction(file, op, args, outcome, null);
+  return result;
+}
+
+function instrument(op, impl) {
+  const wrapped = {
+    [op](...args) {
+      const file = typeof process === "undefined" ? undefined : process.env.FRIED_FRICTION_LOG;
+      if (!file) return impl(...args);
+      return callLogged(file, op, impl, args);
+    },
+  }[op];
+  Object.defineProperty(wrapped, "length", { value: impl.length });
+  return wrapped;
+}
+
+const setPropExport = instrument("setProp", setProp);
+const setPropValueExport = instrument("setPropValue", setPropValue);
+const setChildTextExport = instrument("setChildText", setChildText);
+const addChildExport = instrument("addChild", addChild);
+const addStatementAfterExport = instrument("addStatementAfter", addStatementAfter);
+const removeChildExport = instrument("removeChild", removeChild);
+const replaceChildExport = instrument("replaceChild", replaceChild);
+const removeStatementExport = instrument("removeStatement", removeStatement);
+const replaceFunctionExport = instrument("replaceFunction", replaceFunction);
+const addTemplateChildExport = instrument("addTemplateChild", addTemplateChild);
+const setTemplatePropExport = instrument("setTemplateProp", setTemplateProp);
+const setTemplatePropValueExport = instrument("setTemplatePropValue", setTemplatePropValue);
+const setCssRuleExport = instrument("setCssRule", setCssRule);
+const removeCssRuleExport = instrument("removeCssRule", removeCssRule);
+const renameSymbolExport = instrument("renameSymbol", renameSymbol);
+const patchExport = instrument("patch", patch);
+const validateExport = instrument("validate", validate);
+
+export {
+  setPropExport as setProp,
+  setPropValueExport as setPropValue,
+  setChildTextExport as setChildText,
+  addChildExport as addChild,
+  addStatementAfterExport as addStatementAfter,
+  removeChildExport as removeChild,
+  replaceChildExport as replaceChild,
+  removeStatementExport as removeStatement,
+  replaceFunctionExport as replaceFunction,
+  addTemplateChildExport as addTemplateChild,
+  setTemplatePropExport as setTemplateProp,
+  setTemplatePropValueExport as setTemplatePropValue,
+  setCssRuleExport as setCssRule,
+  removeCssRuleExport as removeCssRule,
+  renameSymbolExport as renameSymbol,
+  patchExport as patch,
+  validateExport as validate,
+};
