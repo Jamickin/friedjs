@@ -70,16 +70,24 @@ export async function sync(consumerDir, options = {}, deps = {}) {
   }
   const backups = new Map();
   for (const f of files) { try { backups.set(f.target, await fs.readFile(f.target)); } catch (e) { if (e.code !== 'ENOENT') return fail(e.message); backups.set(f.target, null); } }
+  // Puts every file and the lock back exactly as they were; used after a failed copy and after failing tests.
+  const restore = async () => {
+    for (const [target, bytes] of backups) { if (bytes === null) await fs.rm(target, { force: true }); else await fs.writeFile(target, bytes); }
+    if (previousLock === null) await fs.rm(lockPath, { force: true }); else await fs.writeFile(lockPath, previousLock);
+  };
   try {
-    for (const f of files) { await fs.mkdir(path.dirname(f.target), { recursive: true }); await fs.writeFile(f.target, f.bytes); }
+    for (const f of files) { await fs.mkdir(path.dirname(f.target), { recursive: true }); await (deps.writeFile ?? fs.writeFile)(f.target, f.bytes); }
     await fs.writeFile(lockPath, JSON.stringify({ version: pkg.version, commit, syncedAt: (deps.now ?? (() => new Date().toISOString()))(), files: Object.fromEntries(files.map(f => [f.rel, f.digest])) }, null, 2) + '\n');
-  } catch (e) { return fail(`copy failed: ${e.message}`); }
+  } catch (e) {
+    // A copy that dies half way must not leave some files new and some old.
+    try { await restore(); } catch (r) { return fail(`copy failed (${e.message}) and restoring also failed: ${r.message}`); }
+    return fail(`copy failed, nothing changed: ${e.message}`);
+  }
   if (!options.noTest && spec.test) {
     const result = await (deps.runTest ?? runCommand)(spec.test, consumer);
     if (result.code !== 0) {
       if (options.force) { say(`TEST FAILED (${result.code}); --force kept the new files`); return { code: result.code || 1, testFailed: true, kept: true }; }
-      for (const [target, bytes] of backups) { if (bytes === null) await fs.rm(target, { force: true }); else await fs.writeFile(target, bytes); }
-      if (previousLock === null) await fs.rm(lockPath, { force: true }); else await fs.writeFile(lockPath, previousLock);
+      await restore();
       say(`ROLLED BACK (test exit code ${result.code})`);
       return { code: result.code || 1, testFailed: true, rolledBack: true };
     }

@@ -47,6 +47,25 @@ test('failing test rolls back destination and lock byte-for-byte', async t => {
   assert.deepEqual(await readFile(path.join(f.consumer, 'fried.lock.json')), lockBefore);
 });
 
+test('a copy that dies half way restores every file and the lock', async t => {
+  const f = await fixture(t); await f.call();
+  const ui = p => path.join(f.consumer, 'ui', p);
+  const before = [await readFile(ui('fried.js')), await readFile(ui('addons/fried-db.js')), await readFile(path.join(f.consumer, 'fried.lock.json'))];
+  await writeFile(path.join(f.root, 'fried.js'), 'new one'); await writeFile(path.join(f.root, 'addons', 'fried-db.js'), 'new two');
+  let writes = 0;
+  const flaky = (target, bytes) => { if (++writes === 2) throw new Error('disk full'); return writeFile(target, bytes); };
+  const result = await f.call({}, { writeFile: flaky });
+  assert.equal(result.code, 1); assert.match(result.error, /nothing changed.*disk full/);
+  assert.deepEqual([await readFile(ui('fried.js')), await readFile(ui('addons/fried-db.js')), await readFile(path.join(f.consumer, 'fried.lock.json'))], before);
+});
+
+test('a failed first-ever copy leaves no files and no lock behind', async t => {
+  const f = await fixture(t); let writes = 0;
+  const result = await f.call({}, { writeFile: (target, bytes) => { if (++writes === 2) throw new Error('disk full'); return writeFile(target, bytes); } });
+  assert.equal(result.code, 1);
+  await assert.rejects(readFile(path.join(f.consumer, 'ui', 'fried.js'))); await assert.rejects(readFile(path.join(f.consumer, 'fried.lock.json')));
+});
+
 test('--force keeps failed update and exits nonzero', async t => {
   const f = await fixture(t); await writeFile(path.join(f.root, 'fried.js'), 'new');
   const result = await f.call({ force: true }, { runTest: async () => ({ code: 5 }) });
