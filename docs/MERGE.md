@@ -213,3 +213,37 @@ version stamp stays 0.2.0.
   5,000 8.27 (8.24); 20,000 25.12 (24.7); 50,000 65.18 (61.6); 100,000
   state updates 23.02 (25.2); 600 patcher cycles 320.00 (309.5, +3%;
   this is the gate for the wrapper's cost). All within 25%.
+
+## 0.3.0 (phase F3a): fried-router `:param` routes and query strings -- what changed, how verified
+
+**What changed.** Only `addons/fried-router.js` changed in the runtime
+side; `fried.js` gained nothing but `VERSION = "0.3.0"`. `router(routes)`
+now resolves through the new `matchRoute(routes, path)` and calls the
+view with `{ params, query, path }`; `parseRoute(path)` is exported too.
+The first lookup is the old one (`routes[wholePath]`), so any table that
+resolved before resolves to the same view now; the only paths that
+change are those that fell to `"*"` because of a query string or a
+trailing slash. Pattern keys are matched segment by segment, never
+compiled into a regex. Why: `evolution/EVOLUTION.md` entry 3.
+
+**How it was verified.**
+
+- `tests/router-params.test.js` (11 tests) imports the real addon under
+  Node with a 4-line `window` shim, and drives `router`, `navigate`,
+  `matchRoute` and `parseRoute`: exact routes, `"*"` and a no-argument
+  view behave as before; params, query, decoding, bad escapes,
+  specificity, ties, trailing slashes; pattern text with regex
+  metacharacters matches literally; 60 matches against 50,000-segment
+  and 200,000-character paths finish in about 60 ms.
+- `npm test`: 62 tests, 0 failures, `tests/docs-truth.test.js` and
+  `tests/version.test.js` (0.3.0 in all three places) included.
+- `node stress.js` x3: 43/43 each; create 10,000 rows median 4.07 ms
+  (baseline 4.3), append 1,000 median 2.10 ms (2.2).
+- `node benchmark.js` x3, medians (baseline): 1,000 cards 2.34 ms (2.27);
+  5,000 8.38 (8.24); 20,000 23.99 (24.7); 50,000 61.01 (61.6); 100,000
+  state updates 22.77 (25.2); 600 patcher cycles 308.94 (309.5). All
+  within 25%. Run with `FRIED_FRICTION_LOG` unset: with it set, the
+  patcher instrumentation logs every benchmark cycle and the patcher
+  number reads +76%.
+- `npm run build` passes (type check clean, bundle 37.50 KB / 13.10 KB
+  gzip).

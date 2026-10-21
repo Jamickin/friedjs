@@ -16,7 +16,7 @@ There is no Vite, no Webpack, and no build step required. You write standard Jav
 The core framework (`fried.js`) is fiercely protected from bloat. Advanced features are shipped as optional add-on modules:
 * `fried-db.js`: A synchronous, memory-first reactive database backed by IndexedDB.
 * `fried-virtual.js`: A windowed Virtual Scroller for rendering 100,000+ items without freezing the DOM.
-* `fried-router.js`: A lightweight Hash Router for building SPAs on zero-config static servers.
+* `fried-router.js`: A lightweight Hash Router for building SPAs on zero-config static servers, with `:param` routes (`/plans/:id`) and query strings.
 
 ## Development & Benchmarks
 This repository contains the core framework source, the test suite, and the telemetry dashboard.
