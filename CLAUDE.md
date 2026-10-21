@@ -1,7 +1,7 @@
 # Project instructions: fried.js
 
 This project uses **fried.js**, a tiny plain-JavaScript UI framework, plus
-`patcher.js` for making small, targeted edits to it via AST rewrites
+`tooling/patcher.js` for making small, targeted edits to it via AST rewrites
 instead of full-file regeneration. There is no custom syntax and no build
 step: everything is ordinary JS running in the browser via native
 `<script type="module">`. Read `docs/framework-api.md` before writing or
@@ -58,19 +58,30 @@ what came from where and why, and it's short.
   actions, addressable keys, and other top-level consts/functions
   (`npm run map -- path/to/app.js`), so you know what's there to target
   before reaching for the patcher instead of reading the whole file.
-- `tests/` -- real assertions against real patched/parsed output for
-  `patcher.js` and `fried-map.mjs`, plus `merge-regressions.test.js` (the
-  merge's own structural + behavioral tests) and `browser-verify.mjs` (a
-  real-Chromium Playwright check of the runtime -- run with `node
-  tests/browser-verify.mjs`, needs `playwright` installed separately,
-  it's not a `dependencies` entry since nothing else in this repo needs a
-  browser automation library). Run `npm test` for everything else; keep
-  it passing.
+- `addons/fried-router.js` -- optional: a tiny hash router
+  (`currentRoute`, `navigate`, `router`), browser only.
+- `patcher.js` (repo root) -- a one-line re-export of
+  `tooling/patcher.js`, kept so older imports keep working. Import from
+  `tooling/patcher.js` in new code.
+- `tests/` -- `npm test` runs `tests/test.js` (runtime and patcher unit
+  tests) plus every `tests/*.test.js`, including `tests/docs-truth.test.js`,
+  which fails if this file, `README.md`, `docs/framework-api.md` or
+  `docs/known-limitations.md` names a path, npm script, patcher op or API
+  that doesn't exist. Keep it passing; when it fails, fix the doc.
+- `stress.js` and `benchmark.js` -- correctness at scale and timings
+  (`npm run stress`, `npm run bench`). Compare against
+  `evolution/baseline.md` (25% tolerance) after touching `fried.js` or
+  `tooling/patcher.js`.
+- `CHANGELOG.md` and `fried.js`'s `VERSION` export -- kept equal to
+  `package.json`'s version (`tests/version.test.js` checks it).
+- `evolution/` -- the log of why FriedJS changed (`evolution/EVOLUTION.md`),
+  the performance baseline, and `evolution/friction.jsonl` for recording
+  friction an AI session hits (format in `evolution/README.md`).
 
-This template intentionally has **no app in it**. Build one inside it (an
-`app.js` + `index.html`, or however you want to structure it) rather than
-starting from scratch elsewhere -- the framework, patcher, and conventions
-below are already wired up.
+`app.js`, `index.html`, `style.css` and `server.js` in this repo are the
+fried.js tester and telemetry dashboard, not a starting point for your
+app. Build your own app in its own files (or a copy of this repo) and
+leave those alone unless you're working on the dashboard itself.
 
 ## Conventions to follow
 
@@ -150,7 +161,9 @@ say so rather than force-fitting the patch API.
 
 **Don't invent new framework functions.** `state`, `action`, `ui`, `uid`,
 `mount`, `css`, `cssVar`, `onRender`, `nextTick`, and (if persisting data)
-`createDatabase` are the entire API. Everything else -- lists,
+`createDatabase` are the entire API an app needs. (`fried.js` also exports
+the conveniences `store`, `derived`, `render` and `VERSION`; see
+`docs/framework-api.md`.) Everything else -- lists,
 conditionals, event handling, timers -- is just plain JavaScript, exactly
 as you'd already write it.
 
@@ -159,7 +172,9 @@ as you'd already write it.
 ```
 npm install        # only needed for tooling/patcher.js -- fried.js itself has
                     # zero runtime dependencies
-npm run serve       # serves this folder at http://127.0.0.1:8080
+npm start           # serves this folder at http://localhost:3000
+                    # (set PORT to change it)
+npm test            # unit, docs-truth and version tests
 ```
 
 Serve over HTTP rather than opening an HTML file directly -- ES module

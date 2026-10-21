@@ -8,6 +8,16 @@ including re-running all three of the token-efficiency benchmark's actual
 apps (small/medium/large) end to end against the merged runtime with zero
 changes to those apps.
 
+> **Paths in this file are historical.** The merge was done in a layout
+> with `src/`, `scripts/` and a larger `tests/` folder. In this repo,
+> `src/fried.js` is `fried.js`, `src/patcher.js` is `tooling/patcher.js`,
+> `src/fried-db.js` and `src/fried-virtual.js` are in `addons/`, and
+> `scripts/*.mjs` are in `tooling/`. The test files named in "How this was
+> verified" (`tests/patcher.test.js`, `tests/merge-regressions.test.js`,
+> `tests/browser-verify.mjs` and the rest) were not brought into this
+> repo. The tests that exist here are listed in `docs/framework-api.md`'s
+> "Tests and checks" section.
+
 ## Where each half came from
 
 **`src/fried.js`** (the runtime) is based on the **vnode-based rewrite**
@@ -125,3 +135,39 @@ here -- see `known-limitations.md` for the full writeup of each:
   and 16/16 checks passing, including focus preservation during live
   typing and IndexedDB persistence for the small/medium apps and
   undo/redo + virtualization for the large one.
+
+## 0.2.0 (phase F0): docs match the repo -- what changed, how verified
+
+No runtime behaviour changed. Why: `evolution/EVOLUTION.md` entry 1.
+
+**What changed.** `patcher.js` moved to `tooling/patcher.js` (the root
+`patcher.js` is now `export * from "./tooling/patcher.js"`, so existing
+`./patcher.js` imports such as `benchmark.js` keep working) and `test.js`
+to `tests/test.js`. `npm test` runs `tests/run.mjs`, which runs
+`tests/test.js` plus every `tests/*.test.js`. New npm scripts `map` and
+`check-keys`. `fried.js` gained only `export const VERSION = "0.2.0"`.
+New tests: `tests/docs-truth.test.js` and `tests/version.test.js`. Every
+dead path and npm script in `CLAUDE.md`, `README.md`,
+`docs/framework-api.md` and `docs/known-limitations.md` was fixed, and the
+exports `store`, `derived`, `render`, the `ref` prop and
+`addons/fried-router.js` were documented.
+
+**How it was verified.**
+
+- `tests/docs-truth.test.js` run against the untouched docs (from `git
+  archive` of commit `0864320`) reported 25 dead references: 15 paths
+  (`src/fried.js`, `src/fried-virtual.js`, `scripts/check-keys.mjs` x2,
+  `scripts/fried-map.mjs` x5, `tests/fried-map.test.js` x2,
+  `tests/realistic.test.js`, `tests/diagnostics.test.js`,
+  `merge-regressions.test.js`, `browser-verify.mjs`) and 10 npm scripts
+  (`map` x6, `check-keys` x3, `serve`). On the final tree it passes, along
+  with the rest of `npm test` (17 tests, 0 failures).
+- `node stress.js`: 43 passed, 0 failed, before and after.
+- `node benchmark.js` and the stress timing, 3 runs after vs. the
+  `evolution/baseline.md` medians (25% tolerance), all within 3%: 1,000
+  cards 2.23-2.29 ms (baseline 2.27); 5,000 cards 8.41-8.53 (8.24);
+  20,000 cards 24.3-24.5 (24.7); 50,000 cards 61.0-63.2 (61.6); 100,000
+  state updates 23.2-23.7 (25.2); 600 patcher cycles 300.8-303.8 (309.5);
+  stress create 10,000 rows 4.00-4.15 (4.3); append 1,000 2.10-2.18 (2.2).
+- `npm run map -- app.js` and `npm run check-keys -- app.js` print the
+  index and addressability report for the dashboard app.

@@ -15,7 +15,7 @@
 // across everything patchable in the file, meant to sit in an AI's
 // context, not to be read by a person scanning a terminal.
 //
-// Usage: node scripts/fried-map.mjs [path/to/app.js]   (defaults to app.js)
+// Usage: node tooling/fried-map.mjs [path/to/app.js]   (defaults to app.js)
 import { parse } from "acorn";
 import * as walk from "acorn-walk";
 import fs from "fs";
@@ -72,7 +72,7 @@ export function buildFriedMap(source) {
   // inside -- used below to tell "the same key reused inside one template,
   // a same-scope hazard no `within` scoping can fix" apart from "the same
   // key used by two *different* templates, exactly what patcher.js's
-  // `within` param (see src/patcher.js) exists to disambiguate."
+  // `within` param (see tooling/patcher.js) exists to disambiguate."
   const topLevelFns = funcs.length
     ? ast.body
         .map((n) => (n.type === "ExportNamedDeclaration" ? n.declaration : n))
@@ -87,7 +87,7 @@ export function buildFriedMap(source) {
 
   // A "template" is a top-level named function passed BY REFERENCE to
   // `.map(...)` (`items.value.map(renderItem)`) -- the addressing
-  // convention `addTemplateChild`/`setTemplateProp` in src/patcher.js rely
+  // convention `addTemplateChild`/`setTemplateProp` in tooling/patcher.js rely
   // on. An inline arrow (`items.value.map((it) => ...)`) is intentionally
   // NOT picked up here: it has no name for those ops to find it by, same
   // reason replaceFunction only matches a named top-level `function`.
@@ -134,7 +134,7 @@ export function buildFriedMap(source) {
   }
 
   // A top-level `const <name> = css({...})` -- addressable by
-  // setCssRule/removeCssRule (src/patcher.js), keyed by the rule names it
+  // setCssRule/removeCssRule (tooling/patcher.js), keyed by the rule names it
   // currently defines, so an AI knows what's there to target without
   // reading the call site itself.
   const cssVars = [];
@@ -217,7 +217,7 @@ export function formatFriedMap(map) {
   if (map.templates.length) {
     // Named .map() render templates -- not addressable by key (their own
     // wrapper's key is necessarily dynamic), but addressable by function
-    // name via addTemplateChild/setTemplateProp in src/patcher.js. A
+    // name via addTemplateChild/setTemplateProp in tooling/patcher.js. A
     // "name(> nested1 nested2)" suffix means that template's own body
     // contains another template's .map() call -- purely informational,
     // addTemplateChild/setTemplateProp already reach either one
@@ -231,7 +231,7 @@ export function formatFriedMap(map) {
   }
   if (map.cssVars.length) {
     // Top-level css({...}) calls -- addressable by setCssRule/
-    // removeCssRule (src/patcher.js), a subset of C: above, listed here
+    // removeCssRule (tooling/patcher.js), a subset of C: above, listed here
     // with the rule names each one currently defines.
     const text = map.cssVars.map(({ name, rules }) => `${name}(${rules.join(" ")})`).join(" ");
     lines.push(`CSS: ${text}`);

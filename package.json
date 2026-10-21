@@ -1,15 +1,17 @@
 {
   "name": "friedjs-lib",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "test": "node test.js",
+    "test": "node tests/run.mjs",
     "bench": "node benchmark.js",
     "stress": "node stress.js",
-    "verify": "node test.js && node stress.js",
+    "verify": "node tests/run.mjs && node stress.js",
     "build": "node build.js",
-    "serve:prod": "node server-prod.js"
+    "serve:prod": "node server-prod.js",
+    "map": "node tooling/fried-map.mjs",
+    "check-keys": "node tooling/check-keys.mjs"
   },
   "dependencies": {
     "acorn": "^8.11.0",

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { state, action, uid, store, derived, ui, render, mount } from "./fried.js";
-import { setProp, setChildText, addChild, addStatementAfter, removeChild, renameSymbol, replaceFunction, removeStatement, validate, PatchError } from "./patcher.js";
+import { state, action, uid, store, derived, ui, render, mount } from "../fried.js";
+import { setProp, setChildText, addChild, addStatementAfter, removeChild, renameSymbol, replaceFunction, removeStatement, validate, PatchError } from "../tooling/patcher.js";
 
 test("fried.js: state() creates reactive getter and setter", () => {
   const count = state(0);
