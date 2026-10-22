@@ -7,6 +7,39 @@ equal `package.json`'s `version` and `fried.js`'s `VERSION` export
 (`tests/version.test.js` checks it). Why each change was made is in
 `evolution/EVOLUTION.md`.
 
+## [0.5.0] - 2026-10-22
+
+Friction batch: four additive changes to the server addons and the map,
+each from lines in `evolution/friction.jsonl` written while Orchestra
+moved onto them (phase F4b). No existing call changes behaviour except
+the static-folder escape below, which now answers 404 instead of
+reaching a route. `fried.js` gained only `VERSION = "0.5.0"`. See
+`evolution/EVOLUTION.md` entries 9-12.
+
+### Added
+- `addons/server/fried-serve.js`: a handler's `ctx.send` is bound to its
+  response, `send(code, data, type?, headers?)`, so
+  `createToolHttpHandlers` handlers work directly as routes; the older
+  `send(res, code, data, ...)` form still works.
+- `addons/server/fried-serve.js`: `createAppServer({ notFound })`, a route
+  spec (with the usual `auth`/`role` checks) for paths no route matches.
+- `addons/server/fried-tools.js`: `createToolRegistry(name, tools, {
+  fallbackRole })`, so a role without tools of its own gets that role's
+  tools; an unknown `fallbackRole` throws when declared or replaced.
+- `addons/server/fried-proc.js`: `onParsedLine` gets a third argument `{
+  flushed }`, `true` for the lines `parser.flush()` returned on close.
+- `npm run map`: exported top-level functions and exported function-valued
+  consts appear on `F:`, marked `(exported)`; `buildFriedMap` returns
+  `exportedFuncs`.
+- Tests: 4 in `tests/fried-serve.test.js`, 2 in `tests/fried-tools.test.js`,
+  1 in `tests/fried-map.test.js`, and `tests/fried-proc.test.js` checks the
+  `{ flushed }` argument.
+
+### Fixed
+- `serveStaticDir`: a raw URL under the prefix whose dot segments
+  normalise out of it (`/ui/../api/health`) now gets the static folder's
+  404 instead of falling through to the routes by its normalised path.
+
 ## [0.4.0] - 2026-10-22
 
 Phase F4, friedjs half: four Node-only server addons extracted from

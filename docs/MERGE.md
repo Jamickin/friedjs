@@ -292,3 +292,43 @@ no Node types. Why: `evolution/EVOLUTION.md` entries 4-8.
   within 25%, with `FRIED_FRICTION_LOG` unset.
 - `npm run build` passes (type check clean, bundle 37.50 KB / 13.10 KB
   gzip); before the `jsconfig.json` exclude it failed on the addons.
+
+## 0.5.0 (friction batch): four additive fixes from Orchestra's F4b friction -- what changed, how verified
+
+**What changed.** Four small changes, each answering lines Orchestra
+wrote to `evolution/friction.jsonl` while it moved onto the server addons:
+`addons/server/fried-serve.js` binds a handler's `ctx.send` to its
+response (the old `send(res, ...)` form still works), takes a `notFound`
+route spec, and answers 404 when a raw URL's dot segments normalise out
+of a static prefix; `addons/server/fried-tools.js` takes `fallbackRole`;
+`addons/server/fried-proc.js` passes `{ flushed }` as `onParsedLine`'s
+third argument; `tooling/fried-map.mjs` lists exported functions on `F:`
+as `name(exported)`. `fried.js` changed only its `VERSION`. Why:
+`evolution/EVOLUTION.md` entries 9-12.
+
+**How it was verified.**
+
+- Each change was made in its own task with its own tests, then merged:
+  `tests/fried-serve.test.js` (+4, now 9, real servers on port 0),
+  `tests/fried-tools.test.js` (+2, now 17), `tests/fried-proc.test.js`
+  (the existing `spawnLineProcess` test now also checks `{ flushed }`),
+  `tests/fried-map.test.js` (+1, now 8). The new fried-serve tests include
+  the case from the friction line: `createToolHttpHandlers` handlers
+  passed straight in as routes, with no ctx wrapper.
+- Backward compatibility: the pre-existing tests of all four modules pass
+  unchanged, including fried-serve's static-folder escape test and the
+  map's "browser-only files keep their existing lines" test. The one
+  behaviour difference (a dot-segment escape now 404s rather than reaching
+  a route) is the behaviour Orchestra already forced with a request
+  listener.
+- `npm test`: 142 tests, 0 failures (135 at 0.4.0), including
+  `tests/docs-truth.test.js` and `tests/version.test.js` (0.5.0 in all
+  three places).
+- `node stress.js` x3: 43/43 each; create 10,000 rows median 4.80 ms
+  (baseline 4.3), append 1,000 median 2.12 ms (2.2).
+- `node benchmark.js` x3, medians (baseline): 1,000 cards 2.37 ms (2.27);
+  5,000 8.27 (8.24); 20,000 25.24 (24.7); 50,000 66.01 (61.6); 100,000
+  state updates 24.23 (25.2); 600 patcher cycles 316.12 (309.5). All
+  within 25%, with `FRIED_FRICTION_LOG` unset.
+- `npm run build` passes (type check clean, bundle 37.50 KB / 13.10 KB
+  gzip).

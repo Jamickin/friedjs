@@ -289,7 +289,7 @@ import { createAppServer, serveStaticDir, createSseHandler, readJsonBody } from 
 ```
 
 - `createAppServer({ host = "127.0.0.1", port = 7777, allowedHosts, routes,
-  staticFiles, staticDirs, auth, unauthError, maxBodyBytes })` -> `{ server,
+  staticFiles, staticDirs, auth, unauthError, maxBodyBytes, notFound })` -> `{ server,
   listen, close, send, readJsonBody }`. A request whose `Host` header isn't
   allowed gets 403 (a DNS-rebinding guard). The token comes from
   `Authorization: Bearer ...` or `?token=`; `auth(token, req, url)` returns
@@ -301,10 +301,26 @@ import { createAppServer, serveStaticDir, createSseHandler, readJsonBody } from 
   the JSON body) and may return a value to send as JSON with 200. A thrown
   error is a 400 with its message. `listen()` resolves `{ port, url }`
   (port 0 picks a free port).
+  - `ctx.send` is bound to the request's response (0.5.0):
+    `send(code, data, type?, headers?)`, which is the `ctx.send(code,
+    data)` that `createToolHttpHandlers` calls, so its handlers plug
+    straight into `routes`. The older `send(res, code, data, type?,
+    headers?)` form still works: a first argument that is a response is
+    used as the target.
+  - `notFound` (0.5.0) is a route spec, a handler or `{ handler, auth,
+    role, unauthError }`, used when no route matches, after static files
+    and folders. It goes through the same auth and role checks as a
+    route, so `{ auth: true, handler: () => ... }` answers 401 to an
+    unknown path without a token and runs the handler with one. Without
+    it an unknown path is a 404 `{ error: "not found" }`, as before.
 - `serveStaticDir({ prefix, dir, types, cacheControl })` -> `(req, res,
   pathname) => boolean`: serves files under `dir` for GET/HEAD, only with
   an extension listed in `types`, and answers 404 for anything that
-  escapes `dir` (`..`, encoded slashes, symlinks out).
+  escapes `dir` (`..`, encoded slashes, symlinks out). A raw URL that
+  starts with `prefix` but whose dot segments normalise out of it (a
+  request for `/ui/../api/health` under the prefix "/ui/") is an escape too and
+  gets the 404 (0.5.0); before, it returned `false` and the normalised
+  path reached the routes.
 - `createSseHandler({ since, subscribe, pingMs = 20000 })` -> a route
   handler streaming server-sent events: first every event after `?since=`,
   then live ones. Plugs straight into a `createScore` store.
@@ -323,7 +339,7 @@ literals (`const master = { roll_call: { ... } }`), so `npm run map` lists
 them and `addTool`/`setToolDescription`/`setToolInput` (Patch API below)
 can edit them by name.
 
-- `createToolRegistry(name, tools, { wrapForCaller }?)` -> `{ name,
+- `createToolRegistry(name, tools, { wrapForCaller, fallbackRole }?)` -> `{ name,
   forRole, listForRole, call, register, unregister, replace, roles,
   toMarkdown }`. `tools` is a role map (`{ master: {...}, musician: {...}
   }`), a flat map whose tools may list `roles`, or an array of `{ name,
@@ -335,6 +351,14 @@ can edit them by name.
     error with `status` 404 and `code` `"ENOTOOL"`.
   - `register`/`unregister`/`replace` change tools at runtime, without new
     HTTP handlers or a restart; `toMarkdown()` renders the reference.
+  - `fallbackRole` (0.5.0): a role with no tools of its own gets this
+    role's tools in `forRole`, `listForRole` and `call`, instead of only
+    the shared ones (e.g. `fallbackRole: "musician"` gives every
+    non-master caller the musician tools). The caller keeps its own role;
+    `wrapForCaller` is given the fallback role. It must name a role that
+    has tools, or `createToolRegistry` and `replace` throw a `TypeError`.
+    Roles that have tools are unaffected, and without the option nothing
+    changes.
 - `createToolHttpHandlers(registry)` -> `{ handleList, handleCall }`,
   route handlers for `GET /api/tools` and `POST /api/call` (`{ tool, args
   }`): 200, 404 for an unknown tool, 400 when it throws, 401 without a
@@ -361,6 +385,12 @@ import { spawnLineProcess, killTree, lineReader, limitHit, resetTime, sanitizeOu
   process tree. `onClose` gets `{ code, limit, resumeFailed, badResume,
   startError, spoke, sessionId, finalText }`. A callback that throws never
   breaks the run.
+  - `onParsedLine(line, stream, { flushed })`: the adapter parser's
+    non-blank lines as they stream, with `{ flushed: false }`, then on
+    close whatever `parser.flush()` returns, unfiltered, with `{ flushed:
+    true }` (the third argument is new in 0.5.0, so a caller can cap
+    streamed lines without also capping the flushed ones; two-argument
+    callbacks keep working).
 - `killTree(child, { sync, signal }?)`: ends a child and everything it
   started (`taskkill /T /F` on Windows). `sync: true` blocks until it's
   done, for a timeout.
@@ -607,7 +637,13 @@ action's string label differs from its variable name -- worth noticing,
 since CLAUDE.md's own convention is to keep them the same), `K` is every
 static, patcher-addressable `ui(...)` key in the file in source order, `C`
 is any other top-level `const` (including `css({...})` variables -- they're
-still plain consts), and `F` is top-level function declarations. `T` is
+still plain consts), and `F` is top-level function declarations. Since
+0.5.0 `F` also lists exported ones, marked `(exported)`: `export function
+createTools` and an exported arrow or function expression (`export const
+run = () => ...`) both appear as `F: createTools(exported) run(exported)`;
+the exported const is still on `C` as well. `buildFriedMap` returns them
+in `funcs` and, the exported subset, in `exportedFuncs`. Files without
+exports print the same `F` line as before. `T` is
 the subset of `F` that's a named function passed by reference to `.map()`
 -- addressable by `addTemplateChild`/`setTemplateProp`/`setTemplatePropValue`
 even though its own wrapper's key is dynamic (see the Patch API section
