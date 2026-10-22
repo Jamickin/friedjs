@@ -150,6 +150,7 @@ test('spawnLineProcess stops the whole tree on a usage limit and reports it', as
   });
   const raw = [];
   const parsed = [];
+  const parsedInfo = [];
   const limits = [];
   const sessions = [];
   const t0 = Date.now();
@@ -165,7 +166,7 @@ test('spawnLineProcess stops the whole tree on a usage limit and reports it', as
         raw.push([stream, !!obj]);
         if (obj?.grandchild) grandchild = obj.grandchild;
       },
-      onParsedLine: (l, s) => parsed.push([l, s]),
+      onParsedLine: (l, s, info) => { parsed.push([l, s]); parsedInfo.push([l, info]); },
       onSession: (id) => sessions.push(id),
       onLimit: (l) => limits.push(l),
       onClose: resolve,
@@ -181,6 +182,11 @@ test('spawnLineProcess stops the whole tree on a usage limit and reports it', as
   assert.equal(outcome.finalText, 'the end');
   assert.deepEqual(raw, [['out', true], ['err', false]]);
   assert.deepEqual(parsed, [['event init', 'out'], [outcome.limit, 'err'], ['flushed', 'out']]);
+  assert.deepEqual(parsedInfo, [
+    ['event init', { flushed: false }],
+    [outcome.limit, { flushed: false }],
+    ['flushed', { flushed: true }],
+  ]);
   assert.ok(grandchild);
   assert.ok(await until(() => !alive(grandchild), 2000), 'grandchild is gone within 2s');
 });
