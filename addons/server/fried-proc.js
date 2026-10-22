@@ -174,7 +174,7 @@ export function tailOutput(text, { maxLines = TAIL_LINES, maxBytes = TAIL_BYTES 
  *   } | null,
  *   resumeId?: string | null,
  *   onRawLine?: (line: string, stream: 'out' | 'err', obj: any) => void,
- *   onParsedLine?: (line: string, stream: 'out' | 'err') => void,
+ *   onParsedLine?: (line: string, stream: 'out' | 'err', info: { flushed: boolean }) => void,
  *   onSession?: (sessionId: string) => void,
  *   onSpoke?: (sessionId: string) => void,
  *   onLimit?: (line: string) => void,
@@ -191,7 +191,8 @@ export function tailOutput(text, { maxLines = TAIL_LINES, maxBytes = TAIL_BYTES 
  *   }) => void,
  * }} options
  *   env replaces the child's environment (default process.env). onParsedLine gets the parser's
- *   non-blank lines, then on close whatever parser.flush() returns, unfiltered. onSpoke fires once,
+ *   non-blank feed() lines with { flushed: false }, then on close whatever parser.flush() returns,
+ *   unfiltered, with { flushed: true }. Existing two-argument callbacks remain compatible. onSpoke fires once,
  *   when the run has both spoken and reported a session id (the conversation worth resuming).
  * @returns {{ child: import('node:child_process').ChildProcess, kill: () => void, state: () => { spoke: boolean, sessionId: string | null, limit: string | null, resumeFailed: string | null } }}
  */
@@ -247,7 +248,7 @@ export function spawnLineProcess({
       killTree(child);
     }
     const lines = obj && parser ? parser.feed(obj) : [line];
-    for (const l of lines) if (l && l.trim()) safe(onParsedLine, l, stream);
+    for (const l of lines) if (l && l.trim()) safe(onParsedLine, l, stream, { flushed: false });
   };
   lineReader(child.stdout, (l) => lane(l, 'out'));
   lineReader(child.stderr, (l) => lane(l, 'err'));
@@ -258,7 +259,7 @@ export function spawnLineProcess({
     lane('! failed to start: ' + e.message, 'err');
   });
   child.on('close', (code) => {
-    for (const l of parser?.flush?.() || []) safe(onParsedLine, l, 'out');
+    for (const l of parser?.flush?.() || []) safe(onParsedLine, l, 'out', { flushed: true });
     const badResume = !!resumeId && !!(resumeFailed || (!spoke && !limit && (startError || code !== 0)));
     onClose?.({ code, limit, resumeFailed, badResume, startError, spoke, sessionId, finalText: parser ? parser.final() : '' });
   });
