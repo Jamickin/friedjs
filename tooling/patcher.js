@@ -7,7 +7,7 @@
 // encourages: action(name, fn) and ui(tag, {key, ...}, children). A patch
 // never has to parse or understand the surrounding code, it just finds
 // the one call site with a matching name/key.
-import { parse } from "acorn";
+import { parse, parseExpressionAt } from "acorn";
 import * as walk from "acorn-walk";
 import MagicString from "magic-string";
 import { appendFriction } from "./friction-log.mjs";
@@ -931,10 +931,336 @@ function renameSymbol(source, oldName, newName) {
   return ms.toString();
 }
 
+// -- Server files: tool registries and rosters --------------------------
+//
+// addons/server/fried-tools.js declares tools as plain object literals,
+// `{ <toolName>: { description, input, run } }`, usually grouped by role
+// (`const master = {...}`, `const musician = {...}`) and handed to
+// createToolRegistry. A tool has no ui() key, but it has a name, and the
+// object holding it has a name too, so these ops address a tool by
+// (toolName, group). A tool name that exists in more than one group
+// (Orchestra's fried_friction is in both master and musician) is refused
+// unless the group is given: unlike a UI key, an edit landing on the
+// wrong role's tool silently changes what a different caller sees.
+
+const TOOL_FIELDS = [["description"], ["input", "inputSchema"], ["run"]];
+
+function propName(p) {
+  if (p.type !== "Property" || p.computed) return null;
+  return p.key.type === "Identifier" ? p.key.name : typeof p.key.value === "string" ? p.key.value : null;
+}
+
+function findProp(objNode, names) {
+  return objNode.properties.find((p) => names.includes(propName(p))) || null;
+}
+
+/** A tool definition: an object literal with at least two of
+ * description, input (or inputSchema) and run. */
+function isToolDef(node) {
+  if (!node || node.type !== "ObjectExpression") return false;
+  return TOOL_FIELDS.filter((names) => findProp(node, names)).length >= 2;
+}
+
+/** The name an object literal is known by: `const X = {...}`, `X: {...}`,
+ * or the registry name in `createToolRegistry("X", {...})`. */
+function ownerName(node, parent) {
+  if (!parent) return null;
+  if (parent.type === "VariableDeclarator" && parent.init === node && parent.id.type === "Identifier") return parent.id.name;
+  if (parent.type === "Property" && parent.value === node) return propName(parent);
+  if (parent.type === "AssignmentExpression" && parent.right === node && parent.left.type === "Identifier") return parent.left.name;
+  if (parent.type === "CallExpression" && parent.callee.type === "Identifier" && parent.callee.name === "createToolRegistry") {
+    const n = parent.arguments[0];
+    return n?.type === "Literal" && typeof n.value === "string" ? n.value : null;
+  }
+  return null;
+}
+
+/** Every object literal holding at least one tool definition, as
+ * { group, node, tools: [{ name, prop }] }, in source order. */
+function findToolGroups(ast) {
+  const groups = [];
+  walk.ancestor(ast, {
+    ObjectExpression(node, _state, ancestors) {
+      const tools = node.properties
+        .filter((p) => propName(p) !== null && isToolDef(p.value))
+        .map((p) => ({ name: propName(p), prop: p }));
+      if (!tools.length) return;
+      groups.push({ group: ownerName(node, ancestors[ancestors.length - 2]), node, tools });
+    },
+  });
+  return groups.sort((a, b) => a.node.start - b.node.start);
+}
+
+/** Names passed to createToolRegistry that aren't holding a tool yet:
+ * `const musician = {}` handed over as `createToolRegistry("x", { musician })`. */
+function emptyRegisteredGroups(ast) {
+  const registered = new Set();
+  walk.simple(ast, {
+    CallExpression(node) {
+      if (node.callee.type !== "Identifier" || node.callee.name !== "createToolRegistry") return;
+      const arg = node.arguments[1];
+      if (arg?.type === "Identifier") registered.add(arg.name);
+      if (arg?.type === "ObjectExpression") {
+        for (const p of arg.properties) if (p.type === "Property" && p.value.type === "Identifier") registered.add(p.value.name);
+      }
+    },
+  });
+  const found = [];
+  walk.simple(ast, {
+    VariableDeclarator(d) {
+      if (d.id.type === "Identifier" && registered.has(d.id.name) && d.init?.type === "ObjectExpression" && d.init.properties.length === 0) {
+        found.push({ group: d.id.name, node: d.init, tools: [] });
+      }
+    },
+  });
+  return found;
+}
+
+function allToolGroupNames(groups) {
+  return groups.map((g) => g.group).filter((g) => g !== null);
+}
+
+function requireToolGroup(groups, group) {
+  const matches = groups.filter((g) => g.group === group);
+  if (!matches.length) {
+    throw new PatchError(`no tool registry or group "${group}" found${suggestSuffix(group, allToolGroupNames(groups))}`);
+  }
+  if (matches.length > 1) {
+    throw new PatchError(`more than one tool group is named "${group}" in this file -- rename one, or edit it directly`);
+  }
+  return matches[0];
+}
+
+function requireTool(ast, toolName, withinGroup) {
+  const groups = findToolGroups(ast);
+  const scope = withinGroup == null ? groups : [requireToolGroup(groups, withinGroup)];
+  const hits = [];
+  for (const g of scope) for (const t of g.tools) if (t.name === toolName) hits.push({ ...t, group: g.group });
+  if (!hits.length) {
+    const candidates = scope.flatMap((g) => g.tools.map((t) => t.name));
+    throw new PatchError(`no tool named "${toolName}" found${withinGroup != null ? ` in "${withinGroup}"` : ""}${suggestSuffix(toolName, candidates)}`);
+  }
+  if (hits.length > 1) {
+    const names = [...new Set(hits.map((h) => h.group ?? "(unnamed)"))];
+    if (names.length > 1) {
+      throw new PatchError(`tool "${toolName}" exists in multiple groups (${names.join(", ")}) -- pass withinGroup as the 4th argument to disambiguate`);
+    }
+    throw new PatchError(`tool "${toolName}" is defined more than once in "${names[0]}" -- edit it directly`);
+  }
+  return hits[0].prop.value;
+}
+
+/** Parses `text` as exactly one JS expression; throws acorn's own error otherwise. */
+function parseOneExpression(text) {
+  const node = parseExpressionAt(text, 0, { ecmaVersion: "latest", sourceType: "module" });
+  if (text.slice(node.end).trim() !== "") {
+    throw new SyntaxError(`unexpected text after the expression at position ${node.end}`);
+  }
+  return node;
+}
+
+/**
+ * Adds one tool to a tool group: `addTool(source, "musician", "ping",
+ * "{ description: 'Reply pong', input: obj({}), run: async () => 'pong' }")`.
+ * `toolDefSource` is raw source text (a tool's `run` is a function, so
+ * there's no data-value form of it), checked to be an object literal with
+ * description, input (or inputSchema) and run before anything is written.
+ */
+function addTool(source, targetGroup, toolName, toolDefSource) {
+  if (typeof toolName !== "string" || !toolName) {
+    throw new PatchError(`addTool's toolName must be a non-empty string, got ${typeof toolName}`);
+  }
+  let def = null;
+  try { def = typeof toolDefSource === "string" ? parseOneExpression(toolDefSource) : null; } catch { def = null; }
+  if (!def || def.type !== "ObjectExpression" || !TOOL_FIELDS.every((names) => findProp(def, names))) {
+    throw new PatchError(`addTool's toolDefSource for "${toolName}" must be an object literal with description, input, and run properties`);
+  }
+  const ast = parseSource(source);
+  const group = requireToolGroup([...findToolGroups(ast), ...emptyRegisteredGroups(ast)], targetGroup);
+  if (group.node.properties.some((p) => propName(p) === toolName)) {
+    throw new PatchError(`tool "${toolName}" already exists in "${targetGroup}" -- use setToolDescription, setToolInput, or replace it explicitly`);
+  }
+  const keySource = IDENTIFIER_RE.test(toolName) ? toolName : JSON.stringify(toolName);
+  const { insertAt, text } = computeInsertion(source, group.node, group.node.properties, `${keySource}: ${toolDefSource.trim()}`);
+  const ms = new MagicString(source);
+  ms.appendLeft(insertAt, text);
+  return ms.toString();
+}
+
+/** Replaces a tool's description with a plain string (quoted for you, like
+ * setCssRule's declText). `withinGroup` is required when the tool name is
+ * in more than one group. */
+function setToolDescription(source, toolName, newDescription, withinGroup) {
+  if (typeof newDescription !== "string" || !newDescription) {
+    throw new PatchError(`setToolDescription's newDescription must be a non-empty string, got ${typeof newDescription}`);
+  }
+  const ast = parseSource(source);
+  const def = requireTool(ast, toolName, withinGroup);
+  const ms = new MagicString(source);
+  const existing = findProp(def, ["description"]);
+  if (existing) {
+    ms.overwrite(existing.value.start, existing.value.end, JSON.stringify(newDescription));
+  } else {
+    const { insertAt, text } = computeInsertion(source, def, def.properties, `description: ${JSON.stringify(newDescription)}`);
+    ms.appendLeft(insertAt, text);
+  }
+  return ms.toString();
+}
+
+/** Replaces a tool's input schema with `newInputSource`, raw source text
+ * for one expression (`obj({ id: str('Task id') }, ['id'])`, or a plain
+ * JSON-schema object literal). */
+function setToolInput(source, toolName, newInputSource, withinGroup) {
+  try {
+    if (typeof newInputSource !== "string") throw new Error(`got ${typeof newInputSource}, not a string`);
+    parseOneExpression(newInputSource);
+  } catch (err) {
+    throw new PatchError(`setToolInput's newInputSource must be a valid JS expression (${err.message})`);
+  }
+  const ast = parseSource(source);
+  const def = requireTool(ast, toolName, withinGroup);
+  const ms = new MagicString(source);
+  const existing = findProp(def, ["input", "inputSchema"]);
+  if (existing) {
+    ms.overwrite(existing.value.start, existing.value.end, newInputSource.trim());
+  } else {
+    const { insertAt, text } = computeInsertion(source, def, def.properties, `input: ${newInputSource.trim()}`);
+    ms.appendLeft(insertAt, text);
+  }
+  return ms.toString();
+}
+
+/** The value of a literal-only expression (strings, numbers, booleans,
+ * null, arrays and objects of those); `undefined` for anything else. */
+function staticValue(node) {
+  const NOPE = undefined;
+  switch (node?.type) {
+    case "Literal":
+      return node.regex || typeof node.value === "bigint" ? NOPE : node.value;
+    case "TemplateLiteral":
+      return node.expressions.length ? NOPE : node.quasis[0].value.cooked;
+    case "UnaryExpression":
+      if (node.operator === "-" && node.argument.type === "Literal" && typeof node.argument.value === "number") return -node.argument.value;
+      return NOPE;
+    case "ArrayExpression": {
+      const out = [];
+      for (const el of node.elements) {
+        const v = staticValue(el);
+        if (v === undefined) return NOPE;
+        out.push(v);
+      }
+      return out;
+    }
+    case "ObjectExpression": {
+      const out = {};
+      for (const p of node.properties) {
+        const name = propName(p);
+        const v = name === null || p.kind !== "init" || p.method ? undefined : staticValue(p.value);
+        if (v === undefined) return NOPE;
+        out[name] = v;
+      }
+      return out;
+    }
+    default:
+      return NOPE;
+  }
+}
+
+/** The `agents` array: a JSON roster's `{ "agents": [...] }`, or a JS
+ * module's `agents: [...]` property or `const agents = [...]`. */
+function findAgentsArray(root) {
+  let found = null;
+  walk.simple(root, {
+    Property(p) {
+      if (!found && propName(p) === "agents" && p.value.type === "ArrayExpression") found = p.value;
+    },
+    VariableDeclarator(d) {
+      if (!found && d.id.type === "Identifier" && d.id.name === "agents" && d.init?.type === "ArrayExpression") found = d.init;
+    },
+  });
+  return found;
+}
+
+/**
+ * Appends one agent to a roster's `agents` array: Orchestra's roster.json
+ * (kept valid JSON) or a JS module that declares one. `agent` is a plain
+ * object, or object-literal source text. Needs string id, name and kind;
+ * refuses a duplicate id and a `handoff` entry naming an agent that isn't
+ * in the roster.
+ */
+function addRosterAgent(source, agentValueOrSource) {
+  const isJson = source.trimStart().startsWith("{");
+  let root;
+  try {
+    root = isJson ? parseOneExpression(source) : parseSource(source);
+  } catch (err) {
+    throw new PatchError(`couldn't parse the roster source (${err.message})`);
+  }
+  const agents = findAgentsArray(root);
+  if (!agents) throw new PatchError('no "agents" array found in source');
+
+  let agent;
+  let agentSource = null;
+  if (typeof agentValueOrSource === "string") {
+    let node = null;
+    try { node = parseOneExpression(agentValueOrSource); } catch { node = null; }
+    if (node?.type !== "ObjectExpression") {
+      throw new PatchError('addRosterAgent requires an agent object with string "id", "name", and "kind" fields');
+    }
+    agent = staticValue(node);
+    if (agent === undefined) {
+      if (isJson) throw new PatchError("addRosterAgent can only add literal values (strings, numbers, booleans, null, arrays, objects) to a JSON roster");
+      // A JS roster may hold expressions; only the fields checked below need to be literals.
+      agent = {};
+      for (const k of ["id", "name", "kind", "handoff"]) {
+        const p = findProp(node, [k]);
+        if (p) agent[k] = staticValue(p.value);
+      }
+    }
+    if (!isJson) agentSource = agentValueOrSource.trim();
+  } else {
+    agent = agentValueOrSource;
+  }
+  if (!agent || typeof agent !== "object" || Array.isArray(agent) ||
+      !["id", "name", "kind"].every((k) => typeof agent[k] === "string" && agent[k])) {
+    throw new PatchError('addRosterAgent requires an agent object with string "id", "name", and "kind" fields');
+  }
+  const existingIds = agents.elements
+    .map((el) => (el?.type === "ObjectExpression" ? staticValue(findProp(el, ["id"])?.value) : undefined))
+    .filter((id) => typeof id === "string");
+  if (existingIds.includes(agent.id)) {
+    throw new PatchError(`agent with id "${agent.id}" already exists in roster (existing: ${existingIds.map((x) => JSON.stringify(x)).join(", ")})`);
+  }
+  if (agent.handoff !== undefined) {
+    const list = Array.isArray(agent.handoff) ? agent.handoff : [agent.handoff];
+    const bad = list.find((h) => typeof h !== "string" || (h !== agent.id && !existingIds.includes(h)));
+    if (bad !== undefined) {
+      throw new PatchError(`agent "${agent.id}" hands off to unknown agent "${bad}"${suggestSuffix(String(bad), existingIds)}`);
+    }
+  }
+
+  if (agentSource === null) {
+    try {
+      agentSource = JSON.stringify(agent, null, 2);
+    } catch (err) {
+      throw new PatchError(`couldn't serialize this agent as JSON (${err.message})`);
+    }
+  }
+  // Match the array's item indentation, so a multi-line agent lines up.
+  const last = agents.elements[agents.elements.length - 1];
+  const indent = last ? source.slice(source.lastIndexOf("\n", last.start) + 1, last.start) : "";
+  const text = /^\s*$/.test(indent) ? agentSource.split("\n").join("\n" + indent) : agentSource;
+  const insertion = computeInsertion(source, agents, agents.elements, text);
+  const ms = new MagicString(source);
+  ms.appendLeft(insertion.insertAt, insertion.text);
+  return ms.toString();
+}
+
 const OPS = {
   setProp, setPropValue, setChildText, addChild, addStatementAfter, removeChild, replaceChild,
   removeStatement, renameSymbol, replaceFunction, addTemplateChild, setTemplateProp,
-  setTemplatePropValue, setCssRule, removeCssRule,
+  setTemplatePropValue, setCssRule, removeCssRule, addTool, setToolDescription, setToolInput,
+  addRosterAgent,
 };
 
 /**
@@ -1033,6 +1359,10 @@ const FRICTION_PARAMS = {
   setCssRule: ["varName", "rule", "decl"],
   removeCssRule: ["varName", "rule"],
   renameSymbol: ["oldName", "newName"],
+  addTool: ["group", "toolName", "toolDef"],
+  setToolDescription: ["toolName", "description", "within"],
+  setToolInput: ["toolName", "input", "within"],
+  addRosterAgent: ["agent"],
   patch: ["ops"],
   validate: [],
 };
@@ -1130,6 +1460,10 @@ const setTemplatePropValueExport = instrument("setTemplatePropValue", setTemplat
 const setCssRuleExport = instrument("setCssRule", setCssRule);
 const removeCssRuleExport = instrument("removeCssRule", removeCssRule);
 const renameSymbolExport = instrument("renameSymbol", renameSymbol);
+const addToolExport = instrument("addTool", addTool);
+const setToolDescriptionExport = instrument("setToolDescription", setToolDescription);
+const setToolInputExport = instrument("setToolInput", setToolInput);
+const addRosterAgentExport = instrument("addRosterAgent", addRosterAgent);
 const patchExport = instrument("patch", patch);
 const validateExport = instrument("validate", validate);
 
@@ -1149,6 +1483,10 @@ export {
   setCssRuleExport as setCssRule,
   removeCssRuleExport as removeCssRule,
   renameSymbolExport as renameSymbol,
+  addToolExport as addTool,
+  setToolDescriptionExport as setToolDescription,
+  setToolInputExport as setToolInput,
+  addRosterAgentExport as addRosterAgent,
   patchExport as patch,
   validateExport as validate,
 };

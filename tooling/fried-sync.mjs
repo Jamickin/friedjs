@@ -29,20 +29,33 @@ export async function sync(consumerDir, options = {}, deps = {}) {
   let spec;
   try { spec = JSON.parse(await fs.readFile(path.join(consumer, 'fried.json'), 'utf8')); }
   catch (e) { return fail(e.code === 'ENOENT' ? `missing ${path.join(consumer, 'fried.json')}` : `invalid fried.json: ${e.message}`); }
-  if (!spec || typeof spec !== 'object' || !Array.isArray(spec.files) || !spec.files.length) return fail('fried.json must contain a non-empty files array');
-  const destRel = spec.dest ?? '.';
-  if (typeof destRel !== 'string' || path.isAbsolute(destRel) || /^[A-Za-z]:/.test(destRel)) return fail('dest must be a relative path inside the consumer');
-  const dest = path.resolve(consumer, destRel);
-  if (!inside(consumer, dest)) return fail('dest escapes the consumer directory');
+  if (!spec || typeof spec !== 'object') return fail('fried.json must contain a non-empty files array');
+  // Optional targets: [{ dest, files, flat? }] go to more folders; the top-level dest + files stay the first target.
+  // flat: true drops the source folders (addons/server/fried-score.js -> <dest>/fried-score.js).
+  if (spec.targets !== undefined && (!Array.isArray(spec.targets) || !spec.targets.length)) return fail('targets must be a non-empty array');
+  const targets = [];
+  if (spec.files !== undefined || !spec.targets) targets.push({ dest: spec.dest ?? '.', files: spec.files, flat: spec.flat ?? false, label: 'files' });
+  (spec.targets ?? []).forEach((t, i) => targets.push({ ...(t && typeof t === 'object' ? t : {}), dest: t?.dest ?? '.', flat: t?.flat ?? false, label: `targets[${i}].files` }));
   const files = [];
-  for (const rel of spec.files) {
-    if (!safeRelative(rel)) return fail(`invalid or absolute source path: ${rel}`);
-    const src = path.resolve(root, rel);
-    if (!inside(root, src)) return fail(`source path escapes FriedJS: ${rel}`);
-    try {
-      const bytes = await fs.readFile(src);
-      files.push({ rel, src, bytes, digest: hash(bytes), target: path.resolve(dest, rel) });
-    } catch (e) { return fail(`source file ${rel} is unavailable: ${e.message}`); }
+  const seen = new Map();
+  for (const t of targets) {
+    if (!Array.isArray(t.files) || !t.files.length) return fail(t.label === 'files' ? 'fried.json must contain a non-empty files array' : `${t.label} must be a non-empty array`);
+    if (typeof t.flat !== 'boolean') return fail(`${t.label.replace(/files$/, 'flat')} must be true or false`);
+    if (typeof t.dest !== 'string' || path.isAbsolute(t.dest) || /^[A-Za-z]:/.test(t.dest)) return fail('dest must be a relative path inside the consumer');
+    const dest = path.resolve(consumer, t.dest);
+    if (!inside(consumer, dest)) return fail('dest escapes the consumer directory');
+    for (const rel of t.files) {
+      if (!safeRelative(rel)) return fail(`invalid or absolute source path: ${rel}`);
+      const src = path.resolve(root, rel);
+      if (!inside(root, src)) return fail(`source path escapes FriedJS: ${rel}`);
+      const target = path.resolve(dest, t.flat ? path.basename(rel) : rel);
+      if (seen.has(target)) return fail(`${rel} and ${seen.get(target)} would both be written to ${path.relative(consumer, target).split(path.sep).join('/')}`);
+      seen.set(target, rel);
+      try {
+        const bytes = await fs.readFile(src);
+        files.push({ rel, src, bytes, digest: hash(bytes), target, primary: t.label === 'files' });
+      } catch (e) { return fail(`source file ${rel} is unavailable: ${e.message}`); }
+    }
   }
   let pkg;
   try { pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')); }
@@ -64,7 +77,7 @@ export async function sync(consumerDir, options = {}, deps = {}) {
   if (options.dryRun) {
     for (const f of files) {
       let old = 'missing'; try { old = hash(await fs.readFile(f.target)); } catch {}
-      say(`${f.rel}: ${old} -> ${f.digest}`);
+      say(`${f.primary ? f.rel : `${f.rel} (${path.relative(consumer, f.target).split(path.sep).join('/')})`}: ${old} -> ${f.digest}`);
     }
     return { code: 0, dryRun: true };
   }

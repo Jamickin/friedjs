@@ -7,6 +7,59 @@ equal `package.json`'s `version` and `fried.js`'s `VERSION` export
 (`tests/version.test.js` checks it). Why each change was made is in
 `evolution/EVOLUTION.md`.
 
+## [0.4.0] - 2026-10-22
+
+Phase F4, friedjs half: four Node-only server addons extracted from
+Orchestra's composer with its behaviour unchanged, plus the AI tooling to
+read and patch server files, and multi-target sync. Additive: no browser
+module changed (`fried.js` gained only `VERSION = "0.4.0"`), and every
+existing export, patch op, map line and fried.json keeps working. See
+`evolution/EVOLUTION.md` entries 4-8.
+
+### Added
+- `addons/server/fried-score.js`: `createScore`, `id`, `token`. One JSON
+  state file written atomically (debounced), an append-only events file,
+  an in-memory ring buffer, subscribers and per-id text logs.
+- `addons/server/fried-serve.js`: `createAppServer`, `serveStaticDir`,
+  `createSseHandler`, `readJsonBody`. Localhost HTTP server with a Host
+  guard, bearer/query token auth, route tables with per-route auth and
+  roles, hardened static folders and server-sent events with replay.
+- `addons/server/fried-tools.js`: `createToolRegistry`,
+  `createToolHttpHandlers`, `createMcpStdioServer` and the schema
+  shorthands `str`, `num`, `bool`, `arr`, `obj`. One tool declaration
+  serves HTTP, an MCP stdio shim and generated docs; tools can be
+  replaced at runtime.
+- `addons/server/fried-proc.js`: `spawnLineProcess`, `killTree`,
+  `lineReader`, `limitHit`, `resetTime`, `sanitizeOutput`, `tailOutput`,
+  `RATE_LIMIT`, `RESUME_FAILED`, `sessionIdOk`. Line-by-line child
+  processes, Windows process-tree kill, usage-limit and reset-time
+  parsing.
+- Patch ops `addTool`, `setToolDescription`, `setToolInput` (a tool by
+  name, refused when the name is in more than one group and no group is
+  given) and `addRosterAgent` (JSON or JS rosters; refuses duplicate ids
+  and unknown hand-offs). All four are instrumented like the others and
+  work as `patch()` steps.
+- `npm run map` prints `REG:` (tool registries), `TOOLS:` (tools by group)
+  and `ROUTES:` (route tables and inline `path === "/x"` tests) for server
+  files; `buildFriedMap` returns `registries`, `tools` and `routes`.
+- `tooling/fried-sync.mjs`: fried.json may have `targets: [{ dest, files,
+  flat? }]` next to (or instead of) the top-level `dest`/`files`; `flat:
+  true` copies to `<dest>/<file name>`. All targets share one lock and are
+  restored together when a copy or the consumer's test fails.
+- Tests: `tests/fried-score.test.js`, `tests/fried-serve.test.js`,
+  `tests/fried-tools.test.js`, `tests/fried-proc.test.js`,
+  `tests/patcher-server.test.js`, `tests/fried-map.test.js`, 7 new cases in
+  `tests/fried-sync.test.js`, one in `tests/patcher-instrumentation.test.js`.
+
+### Changed
+- `jsconfig.json` excludes `addons/server` (no Node types in the browser
+  type check), so `npm run build` passes with the new addons in place.
+- `tests/docs-truth.test.js` checks the four server addon sections of
+  `docs/framework-api.md`, and that every export of the addons is
+  documented.
+- `tooling/fried-sync.mjs` now refuses a fried.json whose `flat` is not
+  `true`/`false`, and two files that would land on the same path.
+
 ## [0.3.0] - 2026-10-22
 
 Phase F3a: `addons/fried-router.js` matches `:param` routes and a query

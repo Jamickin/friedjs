@@ -247,3 +247,48 @@ compiled into a regex. Why: `evolution/EVOLUTION.md` entry 3.
   number reads +76%.
 - `npm run build` passes (type check clean, bundle 37.50 KB / 13.10 KB
   gzip).
+
+## 0.4.0 (phase F4, friedjs half): server addons and server-aware tooling -- what changed, how verified
+
+**What changed.** Four new Node-only modules in `addons/server/`
+(`fried-score.js`, `fried-serve.js`, `fried-tools.js`, `fried-proc.js`),
+extracted from Orchestra's composer with its behaviour unchanged; none
+imports `fried.js`, and nothing on the browser side imports them.
+`tooling/fried-map.mjs` gained `REG:`/`TOOLS:`/`ROUTES:` lines,
+`tooling/patcher.js` gained `addTool`, `setToolDescription`,
+`setToolInput` and `addRosterAgent`, and `tooling/fried-sync.mjs` gained
+optional `targets` with `flat`. `fried.js` changed only its `VERSION`.
+`jsconfig.json` excludes `addons/server`, since the browser type check has
+no Node types. Why: `evolution/EVOLUTION.md` entries 4-8.
+
+**How it was verified.**
+
+- Each addon was built in its own task against the design (Orchestra
+  `docs/fried-f4-design.md` section 2), with its own tests:
+  `tests/fried-score.test.js` (12), `tests/fried-serve.test.js` (5, real
+  servers on port 0), `tests/fried-tools.test.js` (15),
+  `tests/fried-proc.test.js` (14, including a real process tree killed
+  within 2 s).
+- The tooling: `tests/patcher-server.test.js` (12) on a fixture shaped like
+  Orchestra's `composer/tools.mjs` (one tool name in two groups) and on JSON
+  and JS rosters; `tests/fried-map.test.js` (7) on fixtures shaped like
+  `composer/tools.mjs` and `composer/server.mjs`;
+  `tests/fried-sync.test.js` (+7) for targets;
+  `tests/patcher-instrumentation.test.js` checks that all 21 ops keep their
+  names, that the root `patcher.js` re-exports them, and that the new ones
+  log no source text or values.
+- Run read-only against Orchestra's real files (in memory, nothing
+  written): the map lists the 34 tools by role and the 10 routes of
+  `composer/server.mjs`; the unscoped `fried_friction` edit is refused;
+  `addTool` and `addRosterAgent` output parses.
+- `npm test`: 135 tests, 0 failures, including `tests/docs-truth.test.js`
+  (now also checking the addon sections, and that every addon export is
+  documented) and `tests/version.test.js` (0.4.0 in all three places).
+- `node stress.js` x3: 43/43 each; create 10,000 rows median 3.98 ms
+  (baseline 4.3), append 1,000 median 2.17 ms (2.2).
+- `node benchmark.js` x3, medians (baseline): 1,000 cards 2.34 ms (2.27);
+  5,000 8.15 (8.24); 20,000 24.47 (24.7); 50,000 60.92 (61.6); 100,000
+  state updates 23.91 (25.2); 600 patcher cycles 307.26 (309.5). All
+  within 25%, with `FRIED_FRICTION_LOG` unset.
+- `npm run build` passes (type check clean, bundle 37.50 KB / 13.10 KB
+  gzip); before the `jsconfig.json` exclude it failed on the addons.

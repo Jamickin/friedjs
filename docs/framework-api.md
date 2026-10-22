@@ -243,6 +243,141 @@ parseRoute("/done?agent=codex&day=today");
 // -> { path: "/done", query: { agent: "codex", day: "today" } }
 ```
 
+## Server addons (addons/server/) -- Node only
+
+Four optional modules for a small local Node server, the half of an app
+that isn't in the browser: state on disk, an HTTP server, a tool registry
+an AI can call, and child processes. Node built-ins only, no npm
+dependencies, ES modules. They were extracted from Orchestra's composer
+with its behaviour unchanged (see `docs/MERGE.md`). `npm run build`
+doesn't type-check them (`jsconfig.json` has no Node types; they're in its
+`exclude`), and none of them imports `fried.js`. A consumer copies them
+with `tooling/fried-sync.mjs`: a `targets` entry with `"flat": true` in
+the consumer's fried.json puts `addons/server/fried-score.js` at
+`<dest>/fried-score.js`.
+
+## fried-score.js — one JSON file of state plus an event log
+
+```js
+import { createScore, id, token } from "./addons/server/fried-score.js";
+```
+
+- `createScore(dirOrOptions)` -> `{ state, save, flush, emit, taskLog,
+  readTaskLog, since, subscribe }`. Pass a state folder, or `{ dir,
+  scoreFile = "score.json", eventsFile = "events.jsonl", logsDir = "logs",
+  ringSize = 3000, debounceMs = 150, skipLogTypes = ["log"], initialState }`.
+  Reads score.json back on start (or calls `initialState()`) and reloads
+  the newest `ringSize` events, skipping a corrupt line.
+  - `state`: the live object; mutate it, then call `save()`.
+  - `save()` writes it after `debounceMs` (one write for many changes);
+    `flush()` writes it now. Both write a `.tmp` file and rename it, so a
+    crash never leaves half a file.
+  - `emit(type, text, extra?)` -> the event `{ seq, at, type, text,
+    ...extra }`: appended to the events file (unless its type is in
+    `skipLogTypes`), kept in the ring, passed to every subscriber.
+  - `since(seq)` -> the ring's events after `seq`; `subscribe(fn)` -> an
+    unsubscribe function.
+  - `taskLog(id, line)` / `readTaskLog(id, tail = 200)`: one text log per id
+    under `logsDir`.
+- `id(prefix)` -> `"<prefix>-<base-36 time><4 hex>"`.
+- `token(bytes = 24)` -> a random hex string (48 characters by default).
+
+## fried-serve.js — a localhost HTTP server with routes, auth and SSE
+
+```js
+import { createAppServer, serveStaticDir, createSseHandler, readJsonBody } from "./addons/server/fried-serve.js";
+```
+
+- `createAppServer({ host = "127.0.0.1", port = 7777, allowedHosts, routes,
+  staticFiles, staticDirs, auth, unauthError, maxBodyBytes })` -> `{ server,
+  listen, close, send, readJsonBody }`. A request whose `Host` header isn't
+  allowed gets 403 (a DNS-rebinding guard). The token comes from
+  `Authorization: Bearer ...` or `?token=`; `auth(token, req, url)` returns
+  the caller (`who`) or nothing. `routes` keys are `"GET /api/state"` or a
+  bare `"/api/health"`; a value is a handler or `{ handler, auth, role,
+  unauthError }`. Paths starting with "/api/" need a caller unless `auth: false`
+  (401), and `role` limits a route to those roles (403). A handler gets
+  `{ req, res, url, path, query, who, body, send }` (`await body()` parses
+  the JSON body) and may return a value to send as JSON with 200. A thrown
+  error is a 400 with its message. `listen()` resolves `{ port, url }`
+  (port 0 picks a free port).
+- `serveStaticDir({ prefix, dir, types, cacheControl })` -> `(req, res,
+  pathname) => boolean`: serves files under `dir` for GET/HEAD, only with
+  an extension listed in `types`, and answers 404 for anything that
+  escapes `dir` (`..`, encoded slashes, symlinks out).
+- `createSseHandler({ since, subscribe, pingMs = 20000 })` -> a route
+  handler streaming server-sent events: first every event after `?since=`,
+  then live ones. Plugs straight into a `createScore` store.
+- `readJsonBody(req, maxBytes)` -> the parsed body (`{}` when empty);
+  throws past `maxBytes`.
+
+## fried-tools.js — one tool declaration for HTTP, MCP and docs
+
+```js
+import { createToolRegistry, createToolHttpHandlers, createMcpStdioServer, str, num, bool, arr, obj } from "./addons/server/fried-tools.js";
+```
+
+A tool is `{ description, input, run }` (`input` is a JSON schema, `run(args,
+caller)` may be async). Declare tools grouped by role, as plain object
+literals (`const master = { roll_call: { ... } }`), so `npm run map` lists
+them and `addTool`/`setToolDescription`/`setToolInput` (Patch API below)
+can edit them by name.
+
+- `createToolRegistry(name, tools, { wrapForCaller }?)` -> `{ name,
+  forRole, listForRole, call, register, unregister, replace, roles,
+  toMarkdown }`. `tools` is a role map (`{ master: {...}, musician: {...}
+  }`), a flat map whose tools may list `roles`, or an array of `{ name,
+  ... }`. A tool without a string `description` and a `run` function is
+  refused when declared; a missing `input` becomes `obj({})`.
+  - `forRole(role, callerOrTask)`: the role's tools with `run` bound to
+    that caller; `listForRole` gives `{ name, description, inputSchema }`.
+  - `call(role, tool, args, caller)`: runs one; an unknown tool throws an
+    error with `status` 404 and `code` `"ENOTOOL"`.
+  - `register`/`unregister`/`replace` change tools at runtime, without new
+    HTTP handlers or a restart; `toMarkdown()` renders the reference.
+- `createToolHttpHandlers(registry)` -> `{ handleList, handleCall }`,
+  route handlers for `GET /api/tools` and `POST /api/call` (`{ tool, args
+  }`): 200, 404 for an unknown tool, 400 when it throws, 401 without a
+  caller.
+- `createMcpStdioServer({ url, token, serverInfo, instructions, ... })`
+  -> `{ handleMessage, close }`: an MCP server over stdio (newline JSON-RPC)
+  that answers `tools/list` and `tools/call` by asking that HTTP server,
+  so it holds no tool logic and always shows the current tools.
+- `str(description)`, `num(description)`, `bool(description)`,
+  `arr(description, items?)`, `obj(properties, required?)`: JSON-schema
+  shorthands for `input`.
+
+## fried-proc.js — child processes for AI CLIs and checks
+
+```js
+import { spawnLineProcess, killTree, lineReader, limitHit, resetTime, sanitizeOutput, tailOutput, RATE_LIMIT, RESUME_FAILED, sessionIdOk } from "./addons/server/fried-proc.js";
+```
+
+- `spawnLineProcess({ command, args, cwd, env, adapter, resumeId,
+  onRawLine, onParsedLine, onSession, onSpoke, onLimit, onResumeFailed,
+  onClose })` -> `{ child, kill, state }`: spawns a CLI and reads stdout and
+  stderr line by line (`{`-lines parsed as JSON). A usage-limit line, or a
+  failed resume when `resumeId` is set, calls its callback and kills the
+  process tree. `onClose` gets `{ code, limit, resumeFailed, badResume,
+  startError, spoke, sessionId, finalText }`. A callback that throws never
+  breaks the run.
+- `killTree(child, { sync, signal }?)`: ends a child and everything it
+  started (`taskkill /T /F` on Windows). `sync: true` blocks until it's
+  done, for a timeout.
+- `lineReader(stream, onLine)`: UTF-8 lines, keeping a partial line until
+  its newline arrives.
+- `limitHit(adapter, line, obj, stream)` -> `true` when an output line
+  reports a usage limit (an adapter may supply its own test); `RATE_LIMIT`
+  is the default pattern.
+- `resetTime(line, now?, defaultMinutes = 30)` -> a `Date`: when that
+  limit resets, read from the error text ("try again in 3h 20m", "resets
+  at 14:30"), else `defaultMinutes` from now.
+- `sanitizeOutput(text)` strips ANSI/OSC sequences, `\r` redraws and
+  control characters; `tailOutput(text, { maxLines = 60, maxBytes = 4096
+  }?)` -> the sanitized last lines.
+- `RESUME_FAILED`: the pattern for "that conversation doesn't exist";
+  `sessionIdOk(id)` -> `id` when it's a safe session id, else `null`.
+
 ## Patch API (tooling/patcher.js), for making a small change afterward
 
 - `setProp(source, key, propName, newValueSource, within?)` -- set or add a
@@ -369,6 +504,37 @@ parseRoute("/done?agent=codex&day=today");
   a default value (`{ oldName = 0 }`) rather than guessing which of two
   different edits was meant -- rewrite that one to the explicit form by
   hand first.
+- `addTool(source, group, toolName, toolDefSource)` -- add a tool to a
+  tool group in a server file (see fried-tools.js above): `group` is the
+  name the group object is known by (`const musician = {...}`, a
+  `musician: {...}` property, or the name given to
+  `createToolRegistry("name", {...})`). `toolDefSource` is raw source text
+  for an object literal with `description`, `input` (or `inputSchema`) and
+  `run` -- checked before anything is written. Refuses a name already in
+  that group, and a group that doesn't exist (with a `-- nearest:`
+  suggestion).
+- `setToolDescription(source, toolName, newDescription, withinGroup?)` --
+  replace a tool's description. `newDescription` is a plain **string**,
+  quoted for you (like `setCssRule`'s `declText`).
+- `setToolInput(source, toolName, newInputSource, withinGroup?)` --
+  replace a tool's `input` (or `inputSchema`) with raw source text for one
+  expression (`'obj({ id: str("Task id") }, ["id"])'`); refuses text that
+  doesn't parse as exactly one expression.
+
+  **`withinGroup` (both ops above):** a tool is found by name across every
+  group in the file. When the name is in more than one group (Orchestra's
+  `fried_friction` is in both `master` and `musician`) the op refuses and
+  names the groups, instead of editing whichever comes last -- pass the
+  group to say which one you mean. A tool name in one group needs none.
+- `addRosterAgent(source, agent)` -- append an agent to a roster's
+  `agents` array: a JSON roster (`{ "agents": [...] }`, kept valid JSON
+  and indented like its items) or a JS module (`agents: [...]` or `const
+  agents = [...]`). `agent` is a plain object or object-literal source
+  text; it needs string `id`, `name` and `kind`. Refuses a duplicate `id`
+  (listing the existing ones) and a `handoff` entry naming an agent that
+  isn't in the roster (with a `-- nearest:` suggestion). In a JS roster,
+  source text is inserted as written; a JSON roster only takes literal
+  values.
 - `patch(source, ops)` -- applies a list of `{ op, args }` steps in
   sequence (e.g. `patch(source, [{ op: "setProp", args: [...] }, { op:
   "removeChild", args: [...] }])`), useful when several edits are being
@@ -467,6 +633,30 @@ it (see the Patch API section above); a duplicate confined to one scope
 isn't listed here, since `within` can't fix that one, a rename is the
 only real fix.
 
+A server file (see the server addons above) gets up to three more lines:
+
+```
+REG: orchestra(master musician)
+TOOLS: master(fried_friction roll_call status) musician(fried_friction my_task)
+ROUTES: GET / GET /ui/* GET /api/health GET /api/state POST /api/call
+```
+
+`TOOLS:` lists every tool definition (an object literal with at least two
+of `description`, `input`/`inputSchema` and `run`) by the group it's in,
+in source order -- the names `addTool`/`setToolDescription`/`setToolInput`
+take; a name shown in two groups needs `withinGroup`. Tools in an
+unnamed object are listed last, without a group. `REG:` is each
+`createToolRegistry("name", ...)` call with its groups, or, when a file
+has two or more groups and no such call, one entry named after the
+function holding them (`createTools(master musician)`). `ROUTES:` is
+every route-table key (`routes: { "GET /api/state": ... }` or `const
+routes = {...}`) and every inline `path === "/x"` test or
+`path.startsWith("/ui/")` (shown as `/ui/*`) in source order, without
+repeats; the method comes from a `req.method === "POST"` in the same `&&`
+chain, and a test without one reads as `GET`. The three lines are
+`registries`, `tools` and `routes` on `buildFriedMap`'s result; files
+without any print nothing new.
+
 `buildFriedMap(source)` and `formatFriedMap(map)` are also exported from
 `tooling/fried-map.mjs` for programmatic use -- the CLI above is a thin
 wrapper over them.
@@ -482,5 +672,9 @@ correctness-at-scale suite and `node benchmark.js` the timing benchmark;
 compare their numbers against `evolution/baseline.md`. Keep all of them
 passing when touching `fried.js`, `tooling/patcher.js` or
 `tooling/fried-map.mjs`, and add a case before trusting a new edge case.
-There are no dedicated tests for `tooling/fried-map.mjs` or the
-diagnostics messages yet.
+`tests/fried-map.test.js` covers the map's server lines,
+`tests/patcher-server.test.js` the tool and roster ops, and
+`tests/fried-score.test.js`, `tests/fried-serve.test.js`,
+`tests/fried-tools.test.js` and `tests/fried-proc.test.js` the server
+addons. The map's browser lines (`T:`, `CSS:`, the `!` lines) and most
+`-- nearest:` messages still have no dedicated tests.
