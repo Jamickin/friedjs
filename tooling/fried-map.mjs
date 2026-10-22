@@ -35,6 +35,7 @@ export function buildFriedMap(source) {
   const actions = [];
   const consts = [];
   const funcs = [];
+  const exportedFuncs = [];
 
   function calleeName(node) {
     return node && node.type === "CallExpression" && node.callee.type === "Identifier"
@@ -42,15 +43,23 @@ export function buildFriedMap(source) {
       : null;
   }
 
-  for (const node of ast.body) {
-    if (node.type === "FunctionDeclaration" && node.id) {
+  for (const outer of ast.body) {
+    const exported = outer.type === "ExportNamedDeclaration";
+    const node = exported ? outer.declaration : outer;
+    if (node?.type === "FunctionDeclaration" && node.id) {
       funcs.push(node.id.name);
+      if (exported) exportedFuncs.push(node.id.name);
       continue;
     }
     if (node.type !== "VariableDeclaration") continue;
     for (const decl of node.declarations) {
       if (decl.id.type !== "Identifier" || !decl.init) continue;
       const name = decl.id.name;
+      const exportedValue = exported && (decl.init.type === "ArrowFunctionExpression" || decl.init.type === "FunctionExpression");
+      if (exportedValue) {
+        funcs.push(name);
+        exportedFuncs.push(name);
+      }
       const callee = calleeName(decl.init);
       if (callee === "state") {
         state.push(name);
@@ -199,7 +208,7 @@ export function buildFriedMap(source) {
     .map(([k, owners]) => [k, owners.map((o) => o ?? "(top level)")]);
 
   return {
-    state, actions, keys: staticKeys, consts, funcs,
+    state, actions, keys: staticKeys, consts, funcs, exportedFuncs,
     templates: [...templates],
     templateNesting: [...templateNesting.entries()].map(([outer, nested]) => [outer, nested]),
     cssVars, dynamicKeyCount, duplicateKeys, crossTemplateKeys,
@@ -362,7 +371,10 @@ export function formatFriedMap(map) {
   if (map.actions.length) lines.push(`A: ${map.actions.join(" ")}`);
   if (map.keys.length) lines.push(`K: ${map.keys.join(" ")}`);
   if (map.consts.length) lines.push(`C: ${map.consts.join(" ")}`);
-  if (map.funcs.length) lines.push(`F: ${map.funcs.join(" ")}`);
+  if (map.funcs.length) {
+    const exported = new Set(map.exportedFuncs ?? []);
+    lines.push(`F: ${map.funcs.map((name) => exported.has(name) ? `${name}(exported)` : name).join(" ")}`);
+  }
   if (map.templates.length) {
     // Named .map() render templates -- not addressable by key (their own
     // wrapper's key is necessarily dynamic), but addressable by function

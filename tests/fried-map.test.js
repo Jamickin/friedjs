@@ -85,3 +85,15 @@ test("fried-map: browser-only files print no server lines and keep their existin
   const map = buildFriedMap(src);
   assert.deepEqual([map.registries, map.tools, map.routes], [[], [], []]);
 });
+
+test("fried-map: exported top-level functions and function-valued consts appear on F: as exported", () => {
+  const src = `export function createTools() { return {}; }
+export const arrow = (x) => x;
+export const expression = function named() {};
+function local() {}
+const value = 1;`;
+  assert.equal(line(src, "F"), "F: createTools(exported) arrow(exported) expression(exported) local");
+  const map = buildFriedMap(src);
+  assert.deepEqual(map.funcs, ["createTools", "arrow", "expression", "local"]);
+  assert.deepEqual(map.exportedFuncs, ["createTools", "arrow", "expression"]);
+});
