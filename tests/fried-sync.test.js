@@ -94,3 +94,84 @@ test('dest with nested directories is created', async t => {
   const f = await fixture(t); await writeFile(path.join(f.consumer, 'fried.json'), JSON.stringify({ dest: 'vendor/deep', files: ['fried.js'] }));
   await f.call(); assert.equal(await readFile(path.join(f.consumer, 'vendor', 'deep', 'fried.js'), 'utf8'), 'export const v = 1;');
 });
+
+async function withServerAddons(f, spec) {
+  await mkdir(path.join(f.root, 'addons', 'server'), { recursive: true });
+  await writeFile(path.join(f.root, 'addons', 'server', 'fried-score.js'), 'export const score = 1;');
+  await writeFile(path.join(f.root, 'addons', 'server', 'fried-proc.js'), 'export const proc = 1;');
+  await writeFile(path.join(f.consumer, 'fried.json'), JSON.stringify(spec));
+}
+const serverTarget = { dest: 'composer/vendor', flat: true, files: ['addons/server/fried-score.js', 'addons/server/fried-proc.js'] };
+
+test('targets: a flat target drops source folders, next to the top-level dest', async t => {
+  const f = await fixture(t);
+  await withServerAddons(f, { dest: 'ui', files: ['fried.js'], targets: [serverTarget], test: 'npm test' });
+  const result = await f.call(); assert.equal(result.code, 0);
+  assert.equal(await readFile(path.join(f.consumer, 'ui', 'fried.js'), 'utf8'), 'export const v = 1;');
+  assert.equal(await readFile(path.join(f.consumer, 'composer', 'vendor', 'fried-score.js'), 'utf8'), 'export const score = 1;');
+  assert.equal(await readFile(path.join(f.consumer, 'composer', 'vendor', 'fried-proc.js'), 'utf8'), 'export const proc = 1;');
+  await assert.rejects(readFile(path.join(f.consumer, 'composer', 'vendor', 'addons', 'server', 'fried-score.js')));
+  const lock = JSON.parse(await readFile(path.join(f.consumer, 'fried.lock.json'), 'utf8'));
+  assert.deepEqual(Object.keys(lock.files), ['fried.js', 'addons/server/fried-score.js', 'addons/server/fried-proc.js']);
+  assert.equal((await f.call()).alreadyInSync, true);
+});
+
+test('targets: without flat the source path is kept; targets alone need no top-level files', async t => {
+  const f = await fixture(t);
+  await withServerAddons(f, { targets: [{ dest: 'lib', files: ['addons/server/fried-score.js'] }] });
+  assert.equal((await f.call()).code, 0);
+  assert.equal(await readFile(path.join(f.consumer, 'lib', 'addons', 'server', 'fried-score.js'), 'utf8'), 'export const score = 1;');
+});
+
+test('targets: one source may go to two targets, and a missing copy there breaks "in sync"', async t => {
+  const f = await fixture(t);
+  await withServerAddons(f, { dest: 'ui', files: ['fried.js'], targets: [{ dest: 'other', flat: true, files: ['fried.js'] }] });
+  assert.equal((await f.call()).code, 0);
+  await rm(path.join(f.consumer, 'other', 'fried.js'));
+  const again = await f.call(); assert.equal(again.code, 0); assert.notEqual(again.alreadyInSync, true);
+  assert.equal(await readFile(path.join(f.consumer, 'other', 'fried.js'), 'utf8'), 'export const v = 1;');
+});
+
+test('targets: a failing test rolls back every target and the lock', async t => {
+  const f = await fixture(t);
+  await withServerAddons(f, { dest: 'ui', files: ['fried.js'], targets: [serverTarget], test: 'npm test' });
+  await f.call();
+  const files = [path.join(f.consumer, 'ui', 'fried.js'), path.join(f.consumer, 'composer', 'vendor', 'fried-score.js'), path.join(f.consumer, 'fried.lock.json')];
+  const before = await Promise.all(files.map(p => readFile(p)));
+  await writeFile(path.join(f.root, 'fried.js'), 'new'); await writeFile(path.join(f.root, 'addons', 'server', 'fried-score.js'), 'new score');
+  const result = await f.call({}, { runTest: async () => ({ code: 3 }) });
+  assert.equal(result.rolledBack, true);
+  assert.deepEqual(await Promise.all(files.map(p => readFile(p))), before);
+});
+
+test('targets: a copy that dies in the second target restores the first', async t => {
+  const f = await fixture(t);
+  await withServerAddons(f, { dest: 'ui', files: ['fried.js'], targets: [serverTarget] });
+  let writes = 0;
+  const result = await f.call({}, { writeFile: (target, bytes) => { if (++writes === 3) throw new Error('disk full'); return writeFile(target, bytes); } });
+  assert.equal(result.code, 1);
+  await assert.rejects(readFile(path.join(f.consumer, 'ui', 'fried.js')));
+  await assert.rejects(readFile(path.join(f.consumer, 'composer', 'vendor', 'fried-score.js')));
+  await assert.rejects(readFile(path.join(f.consumer, 'fried.lock.json')));
+});
+
+test('targets: bad shapes, escapes and flat name clashes are refused', async t => {
+  const f = await fixture(t);
+  const refuse = async (spec, re) => { await withServerAddons(f, spec); const r = await f.call(); assert.equal(r.code, 1); assert.match(r.error, re); };
+  await refuse({ dest: 'ui', files: ['fried.js'], targets: [] }, /targets must be a non-empty array/);
+  await refuse({ targets: [{ dest: 'x', files: [] }] }, /targets\[0\]\.files must be a non-empty array/);
+  await refuse({ targets: [{ dest: '../out', files: ['fried.js'] }] }, /escapes the consumer/);
+  await refuse({ targets: [{ dest: 'x', flat: 'yes', files: ['fried.js'] }] }, /targets\[0\]\.flat must be true or false/);
+  await mkdir(path.join(f.root, 'other'), { recursive: true }); await writeFile(path.join(f.root, 'other', 'fried.js'), 'x');
+  await refuse({ targets: [{ dest: 'x', flat: true, files: ['fried.js', 'other/fried.js'] }] }, /other\/fried\.js and fried\.js would both be written to x\/fried\.js/);
+  await refuse({}, /non-empty files array/);
+});
+
+test('targets: --dry-run names the target of a non-primary file and writes nothing', async t => {
+  const f = await fixture(t);
+  await withServerAddons(f, { dest: 'ui', files: ['fried.js'], targets: [serverTarget] });
+  const result = await f.call({ dryRun: true }); assert.equal(result.dryRun, true);
+  assert.ok(f.logs.some(l => l.startsWith('fried.js: missing -> ')));
+  assert.ok(f.logs.some(l => l.startsWith('addons/server/fried-score.js (composer/vendor/fried-score.js): missing -> ')));
+  await assert.rejects(readFile(path.join(f.consumer, 'composer', 'vendor', 'fried-score.js')));
+});

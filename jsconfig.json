@@ -21,6 +21,7 @@
     "tooling",
     "tests",
     "addons/shopify",
+    "addons/server",
     "patcher.js",
     "stress.js",
     "benchmark.js"

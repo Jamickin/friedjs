@@ -203,6 +203,155 @@ export function buildFriedMap(source) {
     templates: [...templates],
     templateNesting: [...templateNesting.entries()].map(([outer, nested]) => [outer, nested]),
     cssVars, dynamicKeyCount, duplicateKeys, crossTemplateKeys,
+    ...buildServerMap(ast),
+  };
+}
+
+// -- Server files (addons/server/) ------------------------------------
+// Tool registries and HTTP routes have names, not ui() keys, so they get
+// their own lines: REG: (createToolRegistry calls), TOOLS: (tool
+// definitions by group -- what addTool/setToolDescription/setToolInput in
+// tooling/patcher.js address) and ROUTES: (route-table keys and inline
+// `path === "/x"` branches). Same tool rule as the patcher: an object
+// literal with at least two of description, input (or inputSchema), run.
+
+const TOOL_FIELDS = [["description"], ["input", "inputSchema"], ["run"]];
+const METHOD_RE = /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+\//;
+const PATH_NAMES = new Set(["path", "pathname", "url", "route"]);
+
+function keyName(p) {
+  if (p.type !== "Property" || p.computed) return null;
+  return p.key.type === "Identifier" ? p.key.name : typeof p.key.value === "string" ? p.key.value : null;
+}
+
+function isToolDef(node) {
+  if (!node || node.type !== "ObjectExpression") return false;
+  return TOOL_FIELDS.filter((names) => node.properties.some((p) => names.includes(keyName(p)))).length >= 2;
+}
+
+function isRegistryCall(node) {
+  return node && node.type === "CallExpression" && node.callee.type === "Identifier" && node.callee.name === "createToolRegistry";
+}
+
+function ownerName(node, parent) {
+  if (!parent) return null;
+  if (parent.type === "VariableDeclarator" && parent.init === node && parent.id.type === "Identifier") return parent.id.name;
+  if (parent.type === "Property" && parent.value === node) return keyName(parent);
+  if (parent.type === "AssignmentExpression" && parent.right === node && parent.left.type === "Identifier") return parent.left.name;
+  if (isRegistryCall(parent)) {
+    const n = parent.arguments[0];
+    return n && n.type === "Literal" && typeof n.value === "string" ? n.value : null;
+  }
+  return null;
+}
+
+// `req.method === "POST"` (either side) -> "POST".
+function methodOf(node) {
+  if (!node || node.type !== "BinaryExpression" || (node.operator !== "===" && node.operator !== "==")) return null;
+  const pairs = [[node.left, node.right], [node.right, node.left]];
+  for (const [a, b] of pairs) {
+    if (a.type === "MemberExpression" && !a.computed && a.property.name === "method" && b.type === "Literal" && typeof b.value === "string") return b.value.toUpperCase();
+  }
+  return null;
+}
+
+function isPathExpr(node) {
+  if (!node) return false;
+  if (node.type === "Identifier") return PATH_NAMES.has(node.name);
+  return node.type === "MemberExpression" && !node.computed && PATH_NAMES.has(node.property.name);
+}
+
+// The method a route test is guarded by: a `x.method === "M"` operand of
+// the same && chain the test sits in. No guard reads as GET.
+function guardMethod(ancestors) {
+  for (let i = ancestors.length - 2; i >= 0; i--) {
+    const a = ancestors[i];
+    if (a.type !== "LogicalExpression" || a.operator !== "&&") break;
+    const stack = [a];
+    while (stack.length) {
+      const n = stack.pop();
+      if (n.type === "LogicalExpression" && n.operator === "&&") stack.push(n.left, n.right);
+      else if (methodOf(n)) return methodOf(n);
+    }
+  }
+  return "GET";
+}
+
+function buildServerMap(ast) {
+  const tools = [];
+  const groups = [];
+  const routes = [];
+  const registries = [];
+
+  walk.ancestor(ast, {
+    ObjectExpression(node, _state, ancestors) {
+      const parent = ancestors[ancestors.length - 2];
+      const defs = node.properties.filter((p) => keyName(p) !== null && isToolDef(p.value));
+      if (defs.length) {
+        const group = ownerName(node, parent);
+        groups.push({ group, start: node.start, enclosing: ancestors.find((a) => a.type === "FunctionDeclaration" && a.id)?.id.name ?? null });
+        for (const p of defs) tools.push({ name: keyName(p), group, start: p.start });
+      }
+      // A route table: `routes: {...}` or `const routes = {...}`.
+      if (ownerName(node, parent) === "routes" && !isRegistryCall(parent)) {
+        for (const p of node.properties) {
+          const k = keyName(p);
+          if (k && METHOD_RE.test(k)) routes.push({ route: k.replace(/\s+/, " "), start: p.start });
+          else if (k && k.startsWith("/")) routes.push({ route: `GET ${k}`, start: p.start });
+        }
+      }
+    },
+    BinaryExpression(node, _state, ancestors) {
+      if (node.operator !== "===" && node.operator !== "==") return;
+      for (const [a, b] of [[node.left, node.right], [node.right, node.left]]) {
+        if (isPathExpr(a) && b.type === "Literal" && typeof b.value === "string" && b.value.startsWith("/")) {
+          routes.push({ route: `${guardMethod(ancestors)} ${b.value}`, start: node.start });
+        }
+      }
+    },
+    CallExpression(node, _state, ancestors) {
+      if (isRegistryCall(node)) {
+        const n = node.arguments[0];
+        const name = n && n.type === "Literal" && typeof n.value === "string" ? n.value : "?";
+        const arg = node.arguments[1];
+        let names = [];
+        if (arg && arg.type === "Identifier") names = [arg.name];
+        else if (arg && arg.type === "ObjectExpression" && !arg.properties.some((p) => isToolDef(p.value))) {
+          names = arg.properties.map(keyName).filter(Boolean);
+        }
+        registries.push({ name, groups: names, start: node.start });
+        return;
+      }
+      // `path.startsWith("/ui/")` -> "GET /ui/*".
+      const c = node.callee;
+      const lit = node.arguments[0];
+      if (c.type === "MemberExpression" && !c.computed && c.property.name === "startsWith" && isPathExpr(c.object) &&
+          lit && lit.type === "Literal" && typeof lit.value === "string" && lit.value.startsWith("/")) {
+        routes.push({ route: `${guardMethod(ancestors)} ${lit.value}*`, start: node.start });
+      }
+    },
+  });
+
+  // Two or more role groups with no createToolRegistry call in the file
+  // are still a registry: named after the function holding them
+  // (Orchestra's createTools), or "(file)" at the top level.
+  if (!registries.length) {
+    const byOwner = new Map();
+    for (const g of groups) {
+      if (g.group === null) continue;
+      const owner = g.enclosing ?? "(file)";
+      if (!byOwner.has(owner)) byOwner.set(owner, { name: owner, groups: [], start: g.start });
+      const r = byOwner.get(owner);
+      if (!r.groups.includes(g.group)) r.groups.push(g.group);
+    }
+    for (const r of byOwner.values()) if (r.groups.length > 1) registries.push(r);
+  }
+
+  const seen = new Set();
+  return {
+    registries: registries.sort((a, b) => a.start - b.start).map(({ name, groups: g }) => ({ name, groups: g })),
+    tools: tools.sort((a, b) => a.start - b.start).map(({ name, group }) => ({ name, group })),
+    routes: routes.sort((a, b) => a.start - b.start).map((r) => r.route).filter((r) => !seen.has(r) && seen.add(r)),
   };
 }
 
@@ -236,6 +385,25 @@ export function formatFriedMap(map) {
     const text = map.cssVars.map(({ name, rules }) => `${name}(${rules.join(" ")})`).join(" ");
     lines.push(`CSS: ${text}`);
   }
+  if (map.registries?.length) {
+    // createToolRegistry calls (or role groups that form one), with their groups.
+    lines.push(`REG: ${map.registries.map(({ name, groups }) => (groups.length ? `${name}(${groups.join(" ")})` : name)).join(" ")}`);
+  }
+  if (map.tools?.length) {
+    // Tool definitions, by group in first-seen order; ungrouped ones last.
+    // addTool/setToolDescription/setToolInput (tooling/patcher.js) address
+    // these by name, and need the group when a name is in more than one.
+    const order = [];
+    const byGroup = new Map();
+    for (const { name, group } of map.tools) {
+      if (!byGroup.has(group)) { byGroup.set(group, []); order.push(group); }
+      byGroup.get(group).push(name);
+    }
+    const text = [...order.filter((g) => g !== null), ...order.filter((g) => g === null)]
+      .map((g) => (g === null ? byGroup.get(g).join(" ") : `${g}(${byGroup.get(g).join(" ")})`)).join(" ");
+    lines.push(`TOOLS: ${text}`);
+  }
+  if (map.routes?.length) lines.push(`ROUTES: ${map.routes.join(" ")}`);
   if (map.dynamicKeyCount) {
     lines.push(`(+ ${map.dynamicKeyCount} dynamic-keyed list item${map.dynamicKeyCount === 1 ? "" : "s"}, not individually patchable -- see check-keys)`);
   }

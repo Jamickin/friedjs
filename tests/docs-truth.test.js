@@ -6,8 +6,9 @@
 //      script;
 //   3. every patcher op the docs list is exported by tooling/patcher.js;
 //   4. every public API name the docs list is exported by the module the
-//      docs say it lives in, and every export of fried.js and
-//      tooling/patcher.js is mentioned in docs/framework-api.md.
+//      docs say it lives in, and every export of fried.js,
+//      tooling/patcher.js and addons/server/*.js is mentioned in
+//      docs/framework-api.md.
 // Failure messages name the doc, the line and the offending text. When a
 // doc is wrong, fix the doc, not this test.
 import test from "node:test";
@@ -131,6 +132,10 @@ function apiSections() {
     const module = h.startsWith("fried-db.js") ? "addons/fried-db.js"
       : h.startsWith("fried-virtual.js") ? "addons/fried-virtual.js"
       : h.startsWith("fried-router.js") ? "addons/fried-router.js"
+      : h.startsWith("fried-score.js") ? "addons/server/fried-score.js"
+      : h.startsWith("fried-serve.js") ? "addons/server/fried-serve.js"
+      : h.startsWith("fried-tools.js") ? "addons/server/fried-tools.js"
+      : h.startsWith("fried-proc.js") ? "addons/server/fried-proc.js"
       : h.startsWith("Patch API") ? "tooling/patcher.js"
       : h.startsWith("More fried.js exports") ? "fried.js"
       : null;
@@ -176,10 +181,11 @@ test("docs-truth: the API and patcher-op lists in CLAUDE.md are real exports", (
   assert.deepEqual(wrong, [], "CLAUDE.md lists names that are not exported:\n" + wrong.join("\n"));
 });
 
-test("docs-truth: every export of fried.js and tooling/patcher.js is documented", () => {
+test("docs-truth: every export of fried.js, tooling/patcher.js and the server addons is documented", () => {
   const api = read("docs/framework-api.md");
   const missing = [];
-  for (const rel of ["fried.js", "tooling/patcher.js"]) {
+  for (const rel of ["fried.js", "tooling/patcher.js", "addons/server/fried-score.js", "addons/server/fried-serve.js",
+    "addons/server/fried-tools.js", "addons/server/fried-proc.js"]) {
     for (const name of exportsOf(rel)) {
       if (!new RegExp("`" + name.replace(/\$/g, "\\$") + "[`(]").test(api)) {
         missing.push(`${rel} exports "${name}" but docs/framework-api.md never mentions \`${name}\``);

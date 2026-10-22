@@ -33,7 +33,8 @@ what came from where and why, and it's short.
   `setChildText`, `addChild`, `removeChild`, `replaceChild`,
   `addStatementAfter`, `removeStatement`, `replaceFunction`,
   `renameSymbol`, `addTemplateChild`, `setTemplateProp`,
-  `setTemplatePropValue`, `setCssRule`, `removeCssRule`, `patch`,
+  `setTemplatePropValue`, `setCssRule`, `removeCssRule`, `addTool`,
+  `setToolDescription`, `setToolInput`, `addRosterAgent`, `patch`,
   `validate`) for making small, targeted edits to an existing app file
   without rewriting the whole thing. `addTemplateChild`/`setTemplateProp`/
   `setTemplatePropValue` address a `.map()` render template's own wrapper
@@ -45,7 +46,10 @@ what came from where and why, and it's short.
   text -- prefer them over `setProp`/`setTemplateProp` unless the value
   genuinely needs to be an expression (see the raw-source note below).
   `setCssRule`/`removeCssRule` address a rule inside a top-level `const x =
-  css({...})` call by rule name.
+  css({...})` call by rule name. In server files, `addTool`/
+  `setToolDescription`/`setToolInput` address a tool by name (plus its
+  group, e.g. `"musician"`, when the name is in more than one group; they
+  refuse otherwise), and `addRosterAgent` appends to a roster's `agents`.
 - `docs/framework-api.md` -- full API reference. Read this first.
 - `docs/known-limitations.md` -- real limitations (and fixes) found by
   actually testing this, not assumed ones.
@@ -55,9 +59,19 @@ what came from where and why, and it's short.
   file are currently addressable by the patcher (`npm run check-keys --
   path/to/app.js`).
 - `tooling/fried-map.mjs` -- prints a compact index of a file's state,
-  actions, addressable keys, and other top-level consts/functions
+  actions, addressable keys, and other top-level consts/functions, plus
+  `REG:`/`TOOLS:`/`ROUTES:` lines for a server file
   (`npm run map -- path/to/app.js`), so you know what's there to target
   before reaching for the patcher instead of reading the whole file.
+- `addons/server/` -- optional, Node only, no npm dependencies, not
+  type-checked by `npm run build`: `fried-score.js` (one JSON state file,
+  an event log, subscribers), `fried-serve.js` (localhost HTTP server:
+  Host guard, token auth, routes, static folders, server-sent events),
+  `fried-tools.js` (one tool declaration served over HTTP, MCP stdio and
+  as docs) and `fried-proc.js` (line-by-line child processes, process-tree
+  kill, usage-limit detection). Documented in `docs/framework-api.md`.
+  `tooling/fried-sync.mjs` copies them into a consumer through a fried.json
+  `targets` entry (`"flat": true` drops the `addons/server/` folders).
 - `addons/fried-router.js` -- optional: a tiny hash router
   (`currentRoute`, `navigate`, `router`, `matchRoute`, `parseRoute`),
   browser only. Routes may use `:param` segments and a query string

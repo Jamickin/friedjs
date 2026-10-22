@@ -18,6 +18,12 @@ The core framework (`fried.js`) is fiercely protected from bloat. Advanced featu
 * `fried-virtual.js`: A windowed Virtual Scroller for rendering 100,000+ items without freezing the DOM.
 * `fried-router.js`: A lightweight Hash Router for building SPAs on zero-config static servers, with `:param` routes (`/plans/:id`) and query strings.
 
+For the Node side of a small local app, `addons/server/` has four more, with no npm dependencies:
+* `fried-score.js`: state in one atomically written JSON file, plus an event log, a ring buffer and subscribers.
+* `fried-serve.js`: a localhost HTTP server with a Host guard, token auth, route tables, safe static folders and server-sent events.
+* `fried-tools.js`: declare a tool once and serve it over HTTP, as an MCP server over stdio, and as docs.
+* `fried-proc.js`: run an AI CLI or a check line by line, kill its whole process tree, spot usage limits.
+
 ## Development & Benchmarks
 This repository contains the core framework source, the test suite, and the telemetry dashboard.
 
@@ -29,7 +35,8 @@ npm test
 node stress.js
 node benchmark.js
 
-# Print what an app file exposes to the patcher
+# Print what an app file exposes to the patcher (server files also get
+# REG:/TOOLS:/ROUTES: lines)
 npm run map -- app.js
 npm run check-keys -- app.js
 

@@ -18,7 +18,8 @@ const VALUE = '"VALUEMARK123"';
 
 const OPS = ["setProp", "setPropValue", "setChildText", "addChild", "addStatementAfter", "removeChild",
   "replaceChild", "removeStatement", "replaceFunction", "addTemplateChild", "setTemplateProp",
-  "setTemplatePropValue", "setCssRule", "removeCssRule", "renameSymbol", "patch", "validate"];
+  "setTemplatePropValue", "setCssRule", "removeCssRule", "renameSymbol", "addTool", "setToolDescription",
+  "setToolInput", "addRosterAgent", "patch", "validate"];
 
 function withLog(fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "patcher-friction-"));
@@ -146,4 +147,23 @@ test("patcher instrumentation: a broken log path never breaks an op", () => {
     if (saved === undefined) delete process.env.FRIED_FRICTION_LOG;
     else process.env.FRIED_FRICTION_LOG = saved;
   }
+});
+
+test("patcher instrumentation: the server ops log their shape, never tool or agent text", () => {
+  const { addTool, setToolDescription, setToolInput, addRosterAgent } = patcher;
+  const tools = `const master = { ${MARK}: { description: "d", input: {}, run: () => 1 } };`;
+  const { text, lines } = withLog(() => {
+    addTool(tools, "master", "ping", `{ description: "VALUEMARK123", input: {}, run: () => 2 }`);
+    setToolDescription(tools, MARK, "VALUEMARK123");
+    assert.throws(() => setToolInput(tools, MARK, "obj({"), PatchError);
+    addRosterAgent(`const agents = [];`, { id: "a", name: "VALUEMARK123", kind: "k" });
+  });
+  assert.deepEqual(lines.map((l) => l.tried), [
+    "addTool(group,toolName,toolDef)",
+    "setToolDescription(toolName,description)",
+    "setToolInput(toolName,input)",
+    "addRosterAgent(agent)",
+  ]);
+  assert.deepEqual(lines.map((l) => l.outcome), ["ok", "ok", "failed", "ok"]);
+  assert.ok(!text.includes(MARK) && !text.includes("VALUEMARK123"));
 });
