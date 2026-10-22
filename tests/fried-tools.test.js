@@ -143,6 +143,45 @@ test("register(), unregister() and replace() hot-reload in place", async () => {
   assert.deepEqual(reg.forRole("musician"), {});
 });
 
+test("fallbackRole: unknown roles get the fallback role's tools, known roles are unaffected", async () => {
+  const seen = [];
+  const reg = createToolRegistry("orchestra", roleMap(), {
+    fallbackRole: "musician",
+    wrapForCaller: (set, role, caller) => { seen.push([role, caller.role]); return set; },
+  });
+  assert.deepEqual(Object.keys(reg.forRole("master")), ["roll_call", "add"]);
+  assert.deepEqual(Object.keys(reg.forRole("musician")), ["my_task", "echo", "boom"]);
+  assert.deepEqual(Object.keys(reg.forRole("claude-b", { id: "t1" })), ["my_task", "echo", "boom"]);
+  assert.deepEqual(reg.listForRole("codex").map((t) => t.name), ["my_task", "echo", "boom"]);
+  assert.deepEqual(await reg.call("gemini", "my_task", {}, { id: "t9" }), { id: "t9" });
+  const r = await reg.call("gemini", "echo", { text: "hi" });
+  assert.equal(r.caller.role, "gemini", "the caller keeps its own role");
+  await assert.rejects(reg.call("gemini", "roll_call"), (e) => e.status === 404 && /no tool "roll_call" for role gemini/.test(e.message));
+  assert.deepEqual(seen.find(([, c]) => c === "claude-b"), ["musician", "claude-b"], "wrapForCaller gets the fallback role");
+  assert.deepEqual(reg.roles(), ["master", "musician"]);
+
+  // Shared tools still reach a fallen-back role, and replace() keeps the fallback.
+  reg.replace([
+    { name: "help", description: "Help.", run: () => "h" },
+    { name: "work", description: "Work.", roles: ["musician"], run: () => "w" },
+  ]);
+  assert.deepEqual(Object.keys(reg.forRole("claude-b")), ["help", "work"]);
+  assert.throws(() => reg.replace({ master: roleMap().master }), /fallbackRole "musician" is not a role/);
+  assert.deepEqual(Object.keys(reg.forRole("claude-b")), ["help", "work"], "a refused replace() leaves the tools as they were");
+});
+
+test("fallbackRole: without the option unknown roles get nothing; a missing fallback is refused", async () => {
+  const reg = createToolRegistry("orchestra", roleMap());
+  assert.deepEqual(reg.forRole("claude-b"), {});
+  assert.deepEqual(reg.listForRole("claude-b"), []);
+  await assert.rejects(reg.call("claude-b", "my_task"), (e) => e.code === "ENOTOOL");
+
+  assert.throws(() => createToolRegistry("orchestra", roleMap(), { fallbackRole: "worker" }),
+    (e) => e instanceof TypeError && /fallbackRole "worker" is not a role in this registry \(roles: master, musician\)/.test(e.message));
+  assert.throws(() => createToolRegistry("x", { help: { description: "h", run: () => 1 } }, { fallbackRole: "musician" }), /roles: none/);
+  assert.throws(() => createToolRegistry("x", roleMap(), { fallbackRole: "" }), /non-empty role name/);
+});
+
 test("toMarkdown renders a deterministic reference per role", () => {
   const reg = createToolRegistry("orchestra", roleMap());
   const md = reg.toMarkdown();

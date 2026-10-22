@@ -11,6 +11,19 @@
 // caller (rate limits, per-task context), and can be swapped at runtime with
 // register() / unregister() / replace() without recreating the HTTP handlers
 // or restarting the server. Node built-ins only, zero dependencies.
+//
+// Options of createToolRegistry(name, tools, options):
+//   wrapForCaller(tools, role, caller)  wrap each caller's tool set (rate
+//                                       limits, per-task context).
+//   fallbackRole: "musician"            a role with no tools of its own (not
+//                                       in the role map) gets this role's
+//                                       tools in forRole/listForRole/call
+//                                       instead of none. The caller keeps its
+//                                       own role; wrapForCaller is given the
+//                                       fallback role. It must name a role
+//                                       that has tools, or createToolRegistry
+//                                       (and replace()) throw. Without it,
+//                                       unknown roles get only shared tools.
 
 import { StringDecoder } from "node:string_decoder";
 
@@ -120,12 +133,28 @@ function normaliseCaller(role, taskOrCaller) {
  * Create a role-scoped tool registry.
  * @param {string} name
  * @param {Record<string, ToolDef> | Record<string, Record<string, ToolDef>> | Array<ToolDef & { name: string }>} tools
- * @param {{ wrapForCaller?: (tools: Record<string, ToolDef>, role: string, caller: any) => Record<string, ToolDef> }} [options]
+ * @param {{
+ *   wrapForCaller?: (tools: Record<string, ToolDef>, role: string, caller: any) => Record<string, ToolDef>,
+ *   fallbackRole?: string,
+ * }} [options]
  */
 export function createToolRegistry(name, tools, options = {}) {
   const registryName = String(name || "tools");
-  const { wrapForCaller } = options;
-  let current = parseTools(registryName, tools);
+  const { wrapForCaller, fallbackRole } = options;
+  if (fallbackRole !== undefined && (typeof fallbackRole !== "string" || !fallbackRole)) {
+    throw new TypeError(`fried-tools(${registryName}): fallbackRole must be a non-empty role name`);
+  }
+  const checkFallback = (parsed) => {
+    if (fallbackRole !== undefined && !parsed.byRole.has(fallbackRole)) {
+      const known = [...parsed.byRole.keys()].join(", ") || "none";
+      throw new TypeError(`fried-tools(${registryName}): fallbackRole "${fallbackRole}" is not a role in this registry (roles: ${known})`);
+    }
+    return parsed;
+  };
+  let current = checkFallback(parseTools(registryName, tools));
+
+  /** The role whose tools `role` gets: itself if it has its own, else fallbackRole. */
+  const resolveRole = (role) => (fallbackRole !== undefined && !current.byRole.has(role) ? fallbackRole : role);
 
   const rawForRole = (role) => {
     const out = {};
@@ -144,8 +173,9 @@ export function createToolRegistry(name, tools, options = {}) {
    */
   function forRole(role, taskOrCaller) {
     const caller = normaliseCaller(role, taskOrCaller);
-    let set = rawForRole(role);
-    if (typeof wrapForCaller === "function") set = wrapForCaller(set, role, caller) || set;
+    const effective = resolveRole(role);
+    let set = rawForRole(effective);
+    if (typeof wrapForCaller === "function") set = wrapForCaller(set, effective, caller) || set;
     const out = {};
     for (const [n, t] of Object.entries(set)) {
       if (!t || typeof t.run !== "function") continue;
@@ -221,7 +251,7 @@ export function createToolRegistry(name, tools, options = {}) {
    * @param {Record<string, any> | Array<ToolDef & { name: string }>} newTools
    */
   function replace(newTools) {
-    current = parseTools(registryName, newTools);
+    current = checkFallback(parseTools(registryName, newTools));
   }
 
   /** Role names that have their own tools (shared-only registries have none). */
