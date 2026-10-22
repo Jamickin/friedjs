@@ -1,4 +1,4 @@
-import { createServer } from 'node:http';
+import { createServer, ServerResponse } from 'node:http';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path';
 
@@ -46,13 +46,16 @@ export function createAppServer(options = {}) {
         if (file.transform) content = file.transform(content);
         return send(res, 200, content, file.type);
       }
-      const route = routes[`${req.method} ${path}`] ?? routes[path];
+      // options.notFound is a route spec used when nothing matched, e.g. { auth: true, handler } to 401 unknown paths.
+      const route = routes[`${req.method} ${path}`] ?? routes[path] ?? options.notFound;
       if (!route) return send(res, 404, { error: 'not found' });
       const spec = typeof route === 'function' ? { handler: route } : route;
       const requiresAuth = spec.auth ?? path.startsWith('/api/');
       if (requiresAuth && !who) return send(res, 401, { error: spec.unauthError || options.unauthError || 'unauthorized' });
       if (spec.role && !(Array.isArray(spec.role) ? spec.role : [spec.role]).includes(who?.role)) return send(res, 403, { error: 'master only' });
-      const result = await spec.handler({ req, res, url, path, query: url.searchParams, who, body: () => parseBody(req), send });
+      // ctx.send is bound to this response: send(code, data, type?, headers?); the older send(res, code, data, ...) still works.
+      const boundSend = (first, ...rest) => first instanceof ServerResponse ? send(first, ...rest) : send(res, first, ...rest);
+      const result = await spec.handler({ req, res, url, path, query: url.searchParams, who, body: () => parseBody(req), send: boundSend });
       if (result !== undefined && !res.writableEnded) send(res, 200, result);
     } catch (error) {
       if (!res.headersSent) send(res, 400, { error: error.message });
@@ -75,11 +78,12 @@ export function createAppServer(options = {}) {
 export function serveStaticDir(options) {
   const { prefix, dir, types = {}, cacheControl = 'no-cache' } = options;
   return (req, res, pathname) => {
-    if (!pathname.startsWith(prefix)) return false;
     const notFound = () => { json(res, 404, { error: 'not found' }); return true; };
+    const raw = (req.url || '').split('?')[0];
+    // A raw URL under the prefix whose dot segments normalise out of it (/ui/../x) is an escape, not a route.
+    if (!pathname.startsWith(prefix)) return raw.startsWith(prefix) ? notFound() : false;
     if (!['GET', 'HEAD'].includes(req.method)) return notFound();
-    const raw = (req.url || '').split('?')[0].slice(prefix.length);
-    if (/%2e|%2f|%5c/i.test(raw)) return notFound();
+    if (/%2e|%2f|%5c/i.test(raw.slice(prefix.length))) return notFound();
     let rel;
     try { rel = decodeURIComponent(pathname.slice(prefix.length)); } catch { return notFound(); }
     if (!rel || rel.includes('..') || rel.includes('\\') || rel.includes('\0') || isAbsolute(rel) || /^[A-Za-z]:/.test(rel)) return notFound();
