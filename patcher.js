@@ -17,7 +17,7 @@ function parseSource(source) {
   return parse(source, { ecmaVersion: "latest", sourceType: "module" });
 }
 
-/** Every `ui(tag, {key: "...", ...}, children)` call site, by key. */
+/** Every `ui(tag, {key: "...", ...}, children)` call site, grouped by key. */
 function findUiCallsByKey(ast) {
   const found = new Map();
   walk.simple(ast, {
@@ -28,16 +28,26 @@ function findUiCallsByKey(ast) {
       const keyProp = propsArg.properties.find(
         (p) => p.type === "Property" && p.key.type === "Identifier" && p.key.name === "key" && p.value.type === "Literal"
       );
-      if (keyProp) found.set(keyProp.value.value, node);
+      if (!keyProp) return;
+      const k = keyProp.value.value;
+      (found.get(k) ?? found.set(k, []).get(k)).push(node);
     },
   });
   return found;
 }
 
+// A key is meant to address exactly one ui(...) call, same as a React list
+// key. If the source has two call sites sharing a key, a lookup by that key
+// is ambiguous: a caller asking to patch "the element with key x" has no way
+// to say *which* one they meant, and silently picking one (the first, the
+// last, whichever the Map happened to keep) means the patch can land on the
+// wrong element with no signal that anything was wrong -- found empirically
+// while stress-testing setProp() against source with a duplicated key.
 function requireUiNode(ast, key) {
-  const node = findUiCallsByKey(ast).get(key);
-  if (!node) throw new PatchError(`no ui(...) call found with key "${key}"`);
-  return node;
+  const nodes = findUiCallsByKey(ast).get(key);
+  if (!nodes) throw new PatchError(`no ui(...) call found with key "${key}"`);
+  if (nodes.length > 1) throw new PatchError(`key "${key}" is ambiguous: ${nodes.length} ui(...) calls share it`);
+  return nodes[0];
 }
 
 // Insertions go right before a closing "}" or "]". Whether a leading
@@ -172,6 +182,77 @@ export function addStatementAfter(source, afterConstName, newStatementSource) {
   return ms.toString();
 }
 
+/**
+ * Replaces an entire top-level function declaration, by name, with new
+ * source text (signature included). Unlike the other operations, this
+ * doesn't address through `ui()`/`action()` call sites -- it's for patching
+ * a runtime's own internals (fried.js itself), where those conventions
+ * don't apply. Only matches top-level declarations (`function name(...) {}`,
+ * exported or not), same "no need to understand the surrounding code" rule
+ * as addStatementAfter. The `export` keyword, if present, sits outside the
+ * function node's range and is left untouched.
+ */
+export function replaceFunction(source, fnName, newFunctionSource) {
+  const ast = parseSource(source);
+  let target = null;
+  for (const node of ast.body) {
+    const decl = node.type === "ExportNamedDeclaration" ? node.declaration : node;
+    if (decl && decl.type === "FunctionDeclaration" && decl.id && decl.id.name === fnName) {
+      target = decl;
+    }
+  }
+  if (!target) throw new PatchError(`no top-level function declaration named "${fnName}" found`);
+  const ms = new MagicString(source);
+  ms.overwrite(target.start, target.end, newFunctionSource);
+  return ms.toString();
+}
+
+/**
+ * Removes a top-level declaration by name -- a function declaration
+ * (`function name(...) {}`, exported or not) or a single-declarator
+ * variable declaration (`const/let/var name = ...`). The natural inverse
+ * of addStatementAfter()/replaceFunction()'s addressing: together the
+ * three cover add/modify/remove for a runtime's own top-level
+ * declarations, the way ui()-key and action()-name addressing cover
+ * add/modify/remove for application code. Needed empirically: reverting a
+ * helper function added earlier in the same session required falling back
+ * to a raw string replace, since nothing in this file could remove a
+ * declaration cleanly.
+ *
+ * A multi-declarator statement (`let a, b, c;`) is refused rather than
+ * guessed at -- removing the whole statement to drop one name would
+ * silently delete the others too, and this file's rule throughout is to
+ * fail loudly on anything ambiguous rather than take the "probably right"
+ * guess (see requireUiNode's duplicate-key check).
+ */
+export function removeStatement(source, name) {
+  const ast = parseSource(source);
+  let target = null;
+  for (const node of ast.body) {
+    const decl = node.type === "ExportNamedDeclaration" ? node.declaration : node;
+    if (!decl) continue;
+    if (decl.type === "FunctionDeclaration" && decl.id && decl.id.name === name) {
+      target = node;
+    } else if (
+      decl.type === "VariableDeclaration" &&
+      decl.declarations.length === 1 &&
+      decl.declarations[0].id.type === "Identifier" &&
+      decl.declarations[0].id.name === name
+    ) {
+      target = node;
+    } else if (decl.type === "VariableDeclaration" && decl.declarations.length > 1 && decl.declarations.some((d) => d.id.type === "Identifier" && d.id.name === name)) {
+      throw new PatchError(`"${name}" shares a declaration with other names (e.g. "let a, b, c") -- removing the statement would delete those too`);
+    }
+  }
+  if (!target) throw new PatchError(`no top-level declaration named "${name}" found`);
+  const ms = new MagicString(source);
+  let end = target.end;
+  if (source.slice(end, end + 2) === "\n\n") end += 2;
+  else if (source[end] === "\n") end += 1;
+  ms.remove(target.start, end);
+  return ms.toString();
+}
+
 /** Never trust a patched file without re-parsing it first. */
 export function validate(source) {
   try {
@@ -192,7 +273,11 @@ export function removeChild(source, parentKey, childKey) {
     throw new PatchError(`ui(...) call with key "${parentKey}" has no literal children array`);
   }
   
-  let targetIndex = -1;
+  // Collect every match rather than stopping at the first: a duplicated
+  // child key is ambiguous the same way a duplicated top-level key is (see
+  // requireUiNode) and should fail loudly instead of silently removing
+  // whichever one happens to be found first.
+  const matches = [];
   for (let i = 0; i < childrenArg.elements.length; i++) {
     const el = childrenArg.elements[i];
     if (!el || el.type !== "CallExpression") continue;
@@ -202,13 +287,12 @@ export function removeChild(source, parentKey, childKey) {
     const keyProp = propsArg.properties.find(
       (p) => p.type === "Property" && p.key.type === "Identifier" && p.key.name === "key" && p.value.type === "Literal"
     );
-    if (keyProp && keyProp.value.value === childKey) {
-      targetIndex = i;
-      break;
-    }
+    if (keyProp && keyProp.value.value === childKey) matches.push(i);
   }
-  
-  if (targetIndex === -1) throw new PatchError(`no inline child ui(...) call with key "${childKey}" found under parent "${parentKey}"`);
+
+  if (matches.length === 0) throw new PatchError(`no inline child ui(...) call with key "${childKey}" found under parent "${parentKey}"`);
+  if (matches.length > 1) throw new PatchError(`child key "${childKey}" is ambiguous under parent "${parentKey}": ${matches.length} matches`);
+  const targetIndex = matches[0];
   
   const ms = new MagicString(source);
   const target = childrenArg.elements[targetIndex];
@@ -233,35 +317,109 @@ export function removeChild(source, parentKey, childKey) {
   return ms.toString();
 }
 
-/** Renames an action and all references to it throughout the file. */
+// Does `pattern` (a param, or a piece of a destructured param) bind `name`?
+// Covers the shapes real callback signatures actually use -- plain params,
+// defaults, rest, and one level of array/object destructuring is enough for
+// this to be a useful guard without becoming a full pattern-binding engine.
+function patternDeclares(pattern, name) {
+  if (!pattern) return false;
+  switch (pattern.type) {
+    case "Identifier": return pattern.name === name;
+    case "AssignmentPattern": return patternDeclares(pattern.left, name);
+    case "RestElement": return patternDeclares(pattern.argument, name);
+    case "ArrayPattern": return pattern.elements.some((el) => patternDeclares(el, name));
+    case "ObjectPattern":
+      return pattern.properties.some((p) => patternDeclares(p.type === "RestElement" ? p.argument : p.value, name));
+    default: return false;
+  }
+}
+
+// Best-effort shadow check, not full scope resolution: walking outward from
+// an identifier's ancestors (stopping before the top-level Program, since a
+// same-named top-level binding is the target itself, not a shadow of it),
+// true if any enclosing function/catch param or block-local let/const/
+// function declaration re-binds `name` closer than the top level. This
+// doesn't model temporal-dead-zone ordering within a block (a `let name`
+// declared *after* a read in the same block is treated as shadowing that
+// read too), but that source is already broken before any patch touches it.
+function isShadowed(ancestors, name) {
+  for (let i = ancestors.length - 2; i >= 1; i--) {
+    const node = ancestors[i];
+    if (
+      (node.type === "FunctionDeclaration" || node.type === "FunctionExpression" || node.type === "ArrowFunctionExpression") &&
+      node.params.some((p) => patternDeclares(p, name))
+    ) return true;
+    if (node.type === "CatchClause" && patternDeclares(node.param, name)) return true;
+    if (
+      node.type === "BlockStatement" &&
+      node.body.some((stmt) =>
+        (stmt.type === "VariableDeclaration" && stmt.declarations.some((d) => d.id.type === "Identifier" && d.id.name === name)) ||
+        (stmt.type === "FunctionDeclaration" && stmt.id && stmt.id.name === name)
+      )
+    ) return true;
+  }
+  return false;
+}
+
+/**
+ * Renames an action -- its `action("oldName", ...)` name, the top-level
+ * `const oldName = action(...)` binding it's declared on, and every
+ * unshadowed reference to that binding -- throughout the file.
+ *
+ * Two failure modes turned up empirically (renaming fried.js's own source
+ * with this tool) drove the current shape: a plain "rename every Identifier
+ * with this name" pass also rewrites unrelated same-named declarations
+ * anywhere in the file (an inner `const oldName = 42` having nothing to do
+ * with the action), and it rewrites references *inside* a function/callback
+ * that re-declares the same name as a parameter (`.map((oldName) => ...)`,
+ * extremely common) even though those refer to the local binding -- in one
+ * observed case that combination renamed a `let` declaration but left its
+ * own reassignment untouched, producing a ReferenceError. Fixed by scoping
+ * the declarator match to the one actually assigned the matched
+ * `action(...)` call, and by skipping any reference isShadowed() flags as
+ * belonging to a closer binding.
+ */
 export function renameAction(source, oldName, newName) {
   const ast = parseSource(source);
   const ms = new MagicString(source);
   let foundActionDeclaration = false;
-  
+  let targetDeclarator = null;
+
   walk.simple(ast, {
     CallExpression(node) {
-      if (node.callee.type === "Identifier" && node.callee.name === "action") {
-        if (node.arguments.length > 0 && node.arguments[0].type === "Literal" && node.arguments[0].value === oldName) {
-          ms.overwrite(node.arguments[0].start, node.arguments[0].end, JSON.stringify(newName));
-          foundActionDeclaration = true;
-        }
-      }
-    },
-    Identifier(node) {
-      if (node.name === oldName) {
-        ms.overwrite(node.start, node.end, newName);
-      }
+      if (node.callee.type !== "Identifier" || node.callee.name !== "action") return;
+      const nameArg = node.arguments[0];
+      if (!nameArg || nameArg.type !== "Literal" || nameArg.value !== oldName) return;
+      ms.overwrite(nameArg.start, nameArg.end, JSON.stringify(newName));
+      foundActionDeclaration = true;
     },
     VariableDeclarator(node) {
-      if (node.id.type === "Identifier" && node.id.name === oldName) {
-        ms.overwrite(node.id.start, node.id.end, newName);
+      if (
+        node.id.type === "Identifier" && node.id.name === oldName &&
+        node.init && node.init.type === "CallExpression" &&
+        node.init.callee.type === "Identifier" && node.init.callee.name === "action" &&
+        node.init.arguments[0]?.type === "Literal" && node.init.arguments[0].value === oldName
+      ) {
+        targetDeclarator = node;
       }
-    }
-  
+    },
   });
+
   if (!foundActionDeclaration) {
     throw new PatchError(`No action("${oldName}", ...) declaration found.`);
   }
+  if (targetDeclarator) {
+    ms.overwrite(targetDeclarator.id.start, targetDeclarator.id.end, newName);
+  }
+
+  walk.ancestor(ast, {
+    Identifier(node, _state, ancestors) {
+      if (node.name !== oldName) return;
+      if (targetDeclarator && node === targetDeclarator.id) return;
+      if (isShadowed(ancestors, oldName)) return;
+      ms.overwrite(node.start, node.end, newName);
+    },
+  });
+
   return ms.toString();
 }

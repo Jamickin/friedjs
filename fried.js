@@ -7,6 +7,8 @@ const t = () => perf?.now() ?? 0;
 
 let root, renderFn, pendingRender = false, renderHooks = [];
 
+const SVG_TAGS = new Set(["svg", "path", "circle", "g", "rect", "line", "polygon", "polyline", "text"]);
+
 export function mount(fn, el)  { renderFn = fn; root = el; render(); }
 export function onRender(fn)   { renderHooks.push(fn); return () => { renderHooks = renderHooks.filter(h => h !== fn); }; }
 export function nextTick(fn)   { return fn ? queueMicrotask(fn) : new Promise(queueMicrotask); }
@@ -69,30 +71,31 @@ export function cssVar(name, value) {
 
 function createDom(v) {
   if (typeof v === "string" || typeof v === "number") return document.createTextNode(v);
-  
-  const isSvg = v.tag === "svg" || v.tag === "path" || v.tag === "circle" || v.tag === "g" || v.tag === "rect" || v.tag === "line" || v.tag === "polygon" || v.tag === "polyline" || v.tag === "text";
+
+  const isSvg = SVG_TAGS.has(v.tag);
   const el = isSvg ? document.createElementNS("http://www.w3.org/2000/svg", v.tag) : document.createElement(v.tag);
-  
+
   el._friedKey = v._friedKey;
   el._friedHandlers = v._friedHandlers;
   el._friedProps = v.props;
-  
+  el._friedTag = v.tag;
+
   if (v._friedHandlers) {
     for (const evt in v._friedHandlers) {
       el.addEventListener(evt, e => el._friedHandlers?.[evt]?.(e));
     }
   }
-  
+
   for (const k in v.props) {
     const val = v.props[k];
     if (k === "key") continue;
     if (k === "class") {
       if (isSvg) el.setAttribute("class", val); else el.className = val;
     } else if (k === "checked") el.checked = !!val;
-    else if (k.startsWith("on")) {} 
+    else if (k.startsWith("on")) {}
     else if (val !== false && val != null) el.setAttribute(k, val);
   }
-  
+
   for (let i = 0; i < v.children.length; i++) {
     el.appendChild(createDom(v.children[i]));
   }
@@ -107,16 +110,16 @@ function hydrate(o, n) {
     if (o.nodeValue != n) o.nodeValue = String(n);
     return o;
   }
-  
-  const tagO = o.tagName ? o.tagName.toLowerCase() : null;
+
+  const tagO = o._friedTag ?? (o.tagName ? o.tagName.toLowerCase() : null);
   const tagN = isTextN ? null : n.tag; // n.tag is already lowercase from ui()
-  
+
   if (o.nodeType !== (isTextN ? 3 : 1) || tagO !== tagN) {
     const newEl = createDom(n);
     o.replaceWith(newEl);
     return newEl;
   }
-  
+
   hydrateAttrs(o, n);
   hydrateChildren(o, n);
   return o;
@@ -157,21 +160,47 @@ function hydrateAttrs(o, n) {
 
 function hydrateChildren(op, np) {
   const oc = op.childNodes, nc = np.children;
-  const ol = oc.length, nl = nc.length, cl = Math.min(ol, nl);
+  const ol = oc.length, nl = nc.length;
 
-  let seq = true;
-  for (let i = 0; i < cl; i++) {
-    const oNode = oc[i], nNode = nc[i];
-    const nKey = typeof nNode === "object" ? nNode._friedKey : undefined;
-    const isTextN = typeof nNode === "string" || typeof nNode === "number";
-    const tagN = isTextN ? null : nNode.tag;
-    const tagO = oNode.tagName ? oNode.tagName.toLowerCase() : null;
+  if (ol === nl) {
+    let seq = true;
+    for (let i = 0; i < ol; i++) {
+      const oNode = oc[i], nNode = nc[i];
+      const nKey = typeof nNode === "object" ? nNode._friedKey : undefined;
+      const isTextN = typeof nNode === "string" || typeof nNode === "number";
+      const tagN = isTextN ? null : nNode.tag;
+      const tagO = oNode._friedTag ?? (oNode.tagName ? oNode.tagName.toLowerCase() : null);
 
-    if (oNode._friedKey !== nKey || oNode.nodeType !== (isTextN ? 3 : 1) || tagO !== tagN) { seq = false; break; }
+      if (oNode._friedKey !== nKey || oNode.nodeType !== (isTextN ? 3 : 1) || tagO !== tagN) { seq = false; break; }
+    }
+    if (seq) {
+      for (let i = 0; i < ol; i++) hydrate(oc[i], nc[i]);
+      return;
+    }
   }
-  
-  if (seq && ol === nl) {
-    for (let i = 0; i < ol; i++) hydrate(oc[i], nc[i]);
+
+  // Two-ended prefix/suffix trim before the keyed Map below: a pure
+  // append/prepend/truncate/contiguous-removal is resolved here with zero
+  // Map allocation. Only a genuine reorder (items remaining on both
+  // trimmed sides) falls through to the untouched original algorithm,
+  // unscoped -- so that path carries no new risk, just a little
+  // (bounded, idempotent) re-hydration of the already-synced ends.
+  const sameSlot = (oNode, nVal) => oNode._friedKey === (typeof nVal === "object" ? nVal._friedKey : undefined);
+  const minLen = Math.min(ol, nl);
+  let start = 0;
+  while (start < minLen && sameSlot(oc[start], nc[start])) { hydrate(oc[start], nc[start]); start++; }
+
+  let oEnd = ol - 1, nEnd = nl - 1;
+  while (oEnd >= start && nEnd >= start && sameSlot(oc[oEnd], nc[nEnd])) { hydrate(oc[oEnd], nc[nEnd]); oEnd--; nEnd--; }
+
+  if (start > oEnd && start > nEnd) return;
+  if (start > oEnd) {
+    const ref = oc[oEnd + 1] || null;
+    for (let i = start; i <= nEnd; i++) op.insertBefore(createDom(nc[i]), ref);
+    return;
+  }
+  if (start > nEnd) {
+    for (let n = oEnd - start + 1; n > 0; n--) oc[start].remove();
     return;
   }
 
@@ -181,12 +210,12 @@ function hydrateChildren(op, np) {
     if (k) (km ??= new Map()).set(k, oc[i]);
   }
 
-  const ncArr = nc; 
+  const ncArr = nc;
   for (let i = 0; i < nl; i++) {
     const nc_i = ncArr[i];
     const k = typeof nc_i === "object" ? nc_i._friedKey : undefined;
     const match = k ? km?.get(k) : oc[i];
-    
+
     if (match?.parentNode === op) {
       if (k) km.delete(k);
       if (op.childNodes[i] !== match) op.insertBefore(match, op.childNodes[i] || null);
@@ -218,30 +247,36 @@ export function action(name, fn) {
 
 export function ui(tag, props = {}, children = []) {
   if (tag === "img") {
-    if (props.loading === undefined) props.loading = "lazy";
-    if (props.decoding === undefined) props.decoding = "async";
+    props = { loading: "lazy", decoding: "async", ...props };
   } else if (props.onclick && tag !== "button" && tag !== "a") {
-    if (!props.role) props.role = "button";
-    if (props.tabIndex === undefined) props.tabIndex = 0;
+    props = { role: "button", tabIndex: 0, ...props };
   }
 
-  const flatChildren = [];
+  let flatChildren = children;
   for (let i = 0; i < children.length; i++) {
     const c = children[i];
-    if (c == null || c === false) continue;
-    if (Array.isArray(c)) {
-      for (let j = 0; j < c.length; j++) {
-        const cc = c[j];
-        if (cc != null && cc !== false) flatChildren.push(cc);
+    if (c == null || c === false || Array.isArray(c)) {
+      flatChildren = children.slice(0, i);
+      for (let j = i; j < children.length; j++) {
+        const cj = children[j];
+        if (cj == null || cj === false) continue;
+        if (Array.isArray(cj)) {
+          for (let k = 0; k < cj.length; k++) {
+            const ck = cj[k];
+            if (ck != null && ck !== false) flatChildren.push(ck);
+          }
+        } else {
+          flatChildren.push(cj);
+        }
       }
-    } else {
-      flatChildren.push(c);
+      break;
     }
   }
 
-  const handlers = {};
+  let handlers = EMPTY;
   for (const k in props) {
     if (k.startsWith("on") && typeof props[k] === "function") {
+      if (handlers === EMPTY) handlers = {};
       handlers[k.slice(2).toLowerCase()] = props[k];
     }
   }

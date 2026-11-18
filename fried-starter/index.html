@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fried.js App</title>
+  <style>
+    :root { 
+      --bg: #0f172a; 
+      --surface: #1e293b;
+      --text: #f8fafc; 
+      --text-muted: #94a3b8;
+      --accent: #3b82f6; 
+      --accent-hover: #2563eb;
+      --danger: #ef4444;
+      --border: #334155;
+    }
+    body { 
+      background: var(--bg); 
+      color: var(--text); 
+      font-family: system-ui, -apple-system, sans-serif; 
+      padding: 2rem; 
+      max-width: 800px;
+      margin: 0 auto;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  
+  <!-- App Entry Point (Native ES Module, No Bundler Needed) -->
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "name": "fried-starter",
+  "version": "1.0.0",
+  "description": "Starter template for Fried.js",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "fried.js",
+    "framework"
+  ],
+  "author": "",
+  "license": "MIT"
+}
