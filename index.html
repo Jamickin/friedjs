@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pivot · fried.js</title>
+  <script>
+    // Applied before first paint, mirroring the inline script Pivot's own
+    // app.html uses for the same reason: without it the page renders one
+    // skin/theme and then swaps once app.js runs.
+    try {
+      var s = localStorage.getItem("pivot-fried:skin") || "flat";
+      var t = localStorage.getItem("pivot-fried:theme") || "light";
+      document.documentElement.dataset.skin = s;
+      document.documentElement.dataset.theme = t;
+    } catch (e) {}
+  </script>
+  <style>
+    body { margin: 0; background: #f1f5f9; }
+    html[data-skin="soft"] body { background: #e4e2ec; }
+    html[data-theme="dark"] body { background: #020617; }
+    html[data-skin="soft"][data-theme="dark"] body { background: #2a2f3a; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
