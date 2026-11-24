@@ -65,6 +65,8 @@ export function createGridUi(theme = {}) {
   const scroll = new Map();
   let fields = new Set();                          // the text fields drawn this frame
   const len = (s) => [...s].length;
+  // The widgets answer to the left button; a region tells you which button it was.
+  const left = (r) => r.clicked && (!r.tap || !r.tap.button);
   const inside = (r, x, y) => x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h;
 
   ui.begin = (g, pointer = ptr) => { grid = g; ptr = pointer; regions = []; ui.hot = null; muted = false; fields = new Set(); };
@@ -127,7 +129,7 @@ export function createGridUi(theme = {}) {
     const bg = on ? t.select : opts.bg;
     if (bg !== undefined) grid.fill(x, y, w, 1, " ", t.ink, bg);
     grid.put(x, y, label, on ? t.accent : (opts.fg === undefined ? t.ink : opts.fg), bg, bg !== undefined);
-    return r.clicked;
+    return left(r);
   };
 
   // A row in a menu: a label on the left, a value on the right. Returns
@@ -137,7 +139,7 @@ export function createGridUi(theme = {}) {
     grid.fill(x, y, w, 1, " ", t.ink, bg);
     grid.put(x + 1, y, (on ? "▸ " : "  ") + label, on ? t.accent : t.ink, bg, true);
     if (value) grid.put(x + w - 1 - len(value), y, value, on ? t.accent : t.dim, bg, true);
-    if (!r.clicked) return 0;
+    if (!left(r)) return 0;
     const at = r.tap ? r.tap.x : ptr.x, v0 = x + w - 1 - len(value);     // where the tap landed; where the value starts
     return value && at >= v0 && at < v0 + len(value) / 2 ? -1 : 1;
   };
@@ -146,7 +148,7 @@ export function createGridUi(theme = {}) {
   ui.slider = (id, x, y, w, value, opts = {}) => {
     const t = ui.theme, r = ui.region(id, x, y, w, 1), inner = Math.max(0, w - 2);
     let v = Math.max(0, Math.min(1, value));
-    if (r.clicked || (r.hot && ptr.down)) v = Math.max(0, Math.min(1, (ptr.x - x - 1) / Math.max(1, inner - 1)));
+    if (left(r) || (r.hot && ptr.down)) v = Math.max(0, Math.min(1, (ptr.x - x - 1) / Math.max(1, inner - 1)));
     v = Math.max(0, Math.min(1, v + (r.wheel ? -Math.sign(r.wheel) * 0.05 : 0)));
     const k = Math.round(v * inner);
     grid.put(x, y, "[" + "=".repeat(k) + "-".repeat(inner - k) + "]", r.hot ? t.accent : (opts.fg === undefined ? t.dim : opts.fg), opts.bg, opts.bg !== undefined);
@@ -175,7 +177,7 @@ export function createGridUi(theme = {}) {
   ui.input = (id, x, y, w, value, opts = {}) => {
     const t = ui.theme, h = opts.h || 1, r = ui.region(id, x, y, w, h);
     fields.add(id);
-    if (r.clicked) ui.focus = id;
+    if (left(r)) ui.focus = id;
     else if (ui.focus === id && taps.some((p) => !inside({ x, y, w, h }, p.x, p.y))) ui.focus = null;
     let v = String(value == null ? "" : value);
     if (ui.focus === id) {

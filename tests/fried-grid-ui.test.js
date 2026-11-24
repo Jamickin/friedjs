@@ -152,3 +152,15 @@ test("fried-grid-ui: a menu row's left half of its value is exactly where the va
   assert.equal(row(g, 1, 21, 29), "‹ abcd ›");                                // the value is 8 cells, in columns 21..28
   assert.deepEqual([click(20), click(21), click(24), click(25), click(28)], [1, -1, -1, 1, 1]);
 });
+
+test("fried-grid-ui: buttons, rows and fields answer to the left button; a region still says which button it was", () => {
+  const g = createGrid(30, 6).clear(" ", 0, 0), ui = createGridUi();
+  const frame = (button) => { ui.begin(g, { x: 0, y: 0, down: false }); if (button !== undefined) ui.tap(3, 1, button); const out = { b: ui.button("b", 1, 1, "Start again"), r: ui.region("r", 0, 0, 30, 6) }; ui.end(); return out; };
+  assert.equal(frame(2).b, false, "a right click does not press a button");
+  assert.equal(frame(0).b, true);
+  ui.begin(g); ui.tap(3, 3, 2); const reg = ui.region("pack", 0, 3, 30, 1); ui.end();
+  assert.equal(reg.clicked, true); assert.equal(reg.tap.button, 2, "but a region of your own hears it, and which button");
+  ui.begin(g); ui.tap(3, 2, 2); assert.equal(ui.row("row", 0, 2, 30, "Look", "‹ a ›"), 0); ui.input("f", 0, 4, 10, ""); ui.end();
+  ui.begin(g); ui.tap(3, 4, 2); ui.input("f", 0, 4, 10, ""); ui.end();
+  assert.equal(ui.focus, null, "nor does it put the caret in a field");
+});

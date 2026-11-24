@@ -61,7 +61,7 @@ export function strokeEllipse(put, cx, cy, rx, ry, opts = {}) {
     const a = k / n * Math.PI * 2;
     // Just under half a cell inside the true edge: the outermost cells a fill covers.
     const x = Math.floor(cx + Math.cos(a) * Math.max(0, rx - 0.49)), y = Math.floor(cy + Math.sin(a) * Math.max(0, ry - 0.49));
-    cells.set(x + "," + y, [x, y]);
+    cells.set((y + 32768) * 65536 + x + 32768, [x, y]);      // (a number, not a string: this runs for every outline, every frame)
   }
   // One glyph a side on every row but the flat top and bottom, so a slanted
   // edge is one character thick.
@@ -179,7 +179,7 @@ export function strokePoly(put, pts, opts = {}) {
         if (covered(x, y)) { found = true; break; }
       }
       if (!found) continue;
-      const key = x + "," + y;
+      const key = (y + 32768) * 65536 + x + 32768;
       if (seen.has(key)) continue;
       seen.add(key);
       const left = x + 0.5 < cx, upper = y + 0.5 < cy;

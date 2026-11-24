@@ -132,6 +132,7 @@ function apiSections() {
     const module = h.startsWith("fried-db.js") ? "addons/fried-db.js"
       : h.startsWith("fried-virtual.js") ? "addons/fried-virtual.js"
       : h.startsWith("fried-router.js") ? "addons/fried-router.js"
+      : h.startsWith("fried-probe.js") ? "addons/fried-probe.js"
       : h.startsWith("fried-grid-ui.js") ? "addons/fried-grid-ui.js"
       : h.startsWith("fried-raster.js") ? "addons/fried-raster.js"
       : h.startsWith("fried-light.js") ? "addons/fried-light.js"

@@ -460,7 +460,9 @@ Widgets are known by the id you pass.
   covers, un-mute, then draw the modal, and the click reaches the modal.
   `region(id, x, y, w, h)` is what the widgets are made of: it answers
   `{ hot, clicked, wheel, tap }`, `tap` being the tap that clicked it
-  (`{ x, y, button }`) or null. A text field that was being typed in and
+  (`{ x, y, button }`) or null. The widgets themselves (`button`, `row`,
+  `slider`, `input`) answer to the left button only; a region of your own
+  hears every button and can tell which. A text field that was being typed in and
   is no longer drawn lets go of the keyboard at `end()`.
   `theme` holds the colours; `ground` may be `fried-grid`'s `TRANSPARENT`.
 - `wrapText(text, width)` -> lines no wider than `width` cells.
@@ -937,3 +939,43 @@ passing when touching `fried.js`, `tooling/patcher.js` or
 `tests/fried-tools.test.js` and `tests/fried-proc.test.js` the server
 addons. The map's browser lines (`T:`, `CSS:`, the `!` lines) and most
 `-- nearest:` messages still have no dedicated tests.
+
+## fried-probe.js — optional tests with no screen
+
+```js
+import { createMouse, createTimers, gridText, findText } from "./fried-probe.js";
+```
+
+An app whose logic is plain functions and plain data needs no browser to
+be tested. Give it a mouse that is not there and a clock you turn by hand,
+read what it drew back as text, and a whole session of use runs in a few
+milliseconds in Node: fast enough to run thousands of random ones on every
+change. (The one consumer so far runs its whole game this way, panels
+drawn and all: 400 random actions, with a check of the whole world after
+each, take about a third of a second, and its 91 tests two and a half.)
+
+- `createMouse(props, { target? })` -> a mouse over an element's handlers
+  (`createPointer().props`, or any object of `onpointerdown` and friends):
+  `move([x, y])`, `down(button, [x, y]?)`, `up(button)`, `click([x, y],
+  button)`, `drag(points, button, { hang, between })`, `wheel(deltaY,
+  [x, y]?, more)`, `context()`, `leave()`, `cancel()`; `x`, `y`,
+  `buttons`, `held(button)`, and `log` (every event sent). Positions are
+  client pixels. It sends what a browser sends, which is not what one
+  would guess: a move names no button (-1) and carries the mask of the
+  buttons held; only the first button down is a pointerdown and only the
+  last up is a pointerup; a second button pressed or released while one is
+  held arrives as a pointermove naming it. A test that sends tidier events
+  passes while the real hand fails.
+- `createTimers()` -> `{ setTimer, clearTimer, now, advance(ms), flush(),
+  size, forPointer }`. `advance` lets time go by and fires every timer
+  that falls due, the earliest first, each at its own moment. Spread
+  `forPointer` into `createPointer`'s options and a hold is `mouse.down(2);
+  timers.advance(500); mouse.up(2);`.
+- `gridText(grid, x0?, y0?, x1?, y1?)` -> a `fried-grid` buffer (or a part
+  of it) as text, one line per row.
+- `findText(grid, text, nth?)` -> `{ x, y }` of where that text is drawn,
+  or null: find a button by its words, then click it.
+
+For a simulation driven by `fried-loop`, call its `update` yourself (or
+`loop.tick(ms)`) for as many steps as the test needs; nothing has to wait
+for a frame.

@@ -77,6 +77,7 @@ what came from where and why, and it's short.
   browser only. Routes may use `:param` segments and a query string
   (`"/plans/:id"`, `#/done?agent=codex`); the view gets
   `{ params, query, path }`.
+- `addons/fried-probe.js` (tests with no screen: `createMouse`, `createTimers`, `gridText`, `findText`)
 - `addons/fried-raster.js`, `addons/fried-light.js`, `addons/fried-grid-ui.js`
   -- optional, on top of `fried-grid`: shapes rasterised into cells at any
   resolution; lighting with heights, normals and cast shadows, carried by

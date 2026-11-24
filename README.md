@@ -21,6 +21,7 @@ The core framework (`fried.js`) is fiercely protected from bloat. Advanced featu
 * `fried-raster.js`: Shapes in character cells (lines, ellipses, polygons, fat lines), so a figure can be drawn at any grid resolution.
 * `fried-light.js`: Lighting for a character grid: heights, normals, point lights that cast shadows, and a glyph for a brightness.
 * `fried-grid-ui.js`: An immediate-mode user interface drawn in the grid itself: panels, buttons, menus, scrolling text, text fields.
+* `fried-probe.js`: Tests with no screen: a mouse that sends what a browser sends, a clock turned by hand, and a grid read back as text. A whole session of play runs in milliseconds, in Node.
 * `fried-loop.js`: A frame loop with a fixed-step simulation tick that sits inside FriedJS's microtask batching (one virtual-DOM render per frame, at most).
 * `fried-pointer.js`: Tap, hold and drag per mouse button, with pointer capture, for a canvas or any element.
 

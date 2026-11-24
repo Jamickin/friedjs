@@ -7,6 +7,26 @@ equal `package.json`'s `version` and `fried.js`'s `VERSION` export
 (`tests/version.test.js` checks it). Why each change was made is in
 `evolution/EVOLUTION.md`.
 
+## [0.9.0] - 2026-11-24
+
+The game's owner, on seeing 120,000 random actions tested in a minute:
+"that can be a cool thing about fried, how fast tests can happen, because
+they don't need screens". It can: the pieces the game's test harness had
+grown are now an addon (`evolution/EVOLUTION.md` entry 24). Additive, with
+one change of behaviour in `fried-grid-ui`.
+
+### Added
+- `addons/fried-probe.js`: `createMouse(props)` (a mouse that sends what a
+  browser sends: a move names no button; only the first button down and
+  the last up are down and up events, a chord in between arrives as moves),
+  `createTimers()` (timers and a clock turned by hand, `forPointer` for
+  `createPointer`), `gridText(grid)` and `findText(grid, text)`.
+
+### Changed
+- `addons/fried-grid-ui.js`: `button`, `row`, `slider` and `input` answer
+  to the left button only (a right click used to press them). `region()`
+  still reports every button's tap, with `tap.button`.
+
 ## [0.8.0] - 2026-11-24
 
 The game's player came back from his first hour with it: a right-button
