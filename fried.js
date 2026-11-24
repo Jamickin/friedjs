@@ -22,7 +22,7 @@
 
 // Kept equal to package.json "version" and the top CHANGELOG.md entry
 // (asserted by tests/version.test.js).
-export const VERSION = "0.6.0";
+export const VERSION = "0.7.0";
 
 const perf = typeof performance !== "undefined" ? performance : null;
 const t = () => perf?.now() ?? 0;

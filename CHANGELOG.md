@@ -7,6 +7,27 @@ equal `package.json`'s `version` and `fried.js`'s `VERSION` export
 (`tests/version.test.js` checks it). Why each change was made is in
 `evolution/EVOLUTION.md`.
 
+## [0.7.0] - 2026-11-24
+
+The game's second pass: its player asked for a screen that is ONLY
+characters (no styled HTML panels, no coloured cell backgrounds), a
+resolution he can turn up, and "a system" for the lighting. Each needed
+something FriedJS did not have (`evolution/friction.jsonl`, consumer
+`whmah-ascii`; `evolution/EVOLUTION.md` entries 17-20). All additive.
+
+### Added
+- `addons/fried-raster.js`: shapes into cells at any resolution
+  (`strokeLine`, `strokePath`, `strokeEllipse`, `fillEllipse`, `fillPoly`,
+  `fillRect`, `fillCapsule`, `edgeGlyph`).
+- `addons/fried-light.js`: `createLighting` (a height per cell, normals,
+  ambient, point lights with cast shadows, added fields) and `toneGlyph`
+  (a glyph for a brightness).
+- `addons/fried-grid-ui.js`: `createGridUi`, an immediate-mode UI drawn
+  in a cell buffer (box, button, row, slider, scrolling list, text field,
+  `mute` for what a modal covers), and `wrapText`.
+- `addons/fried-grid.js`: `TRANSPARENT` and `createGridRenderer({ alpha })`,
+  so one grid can be laid over another.
+
 ## [0.6.0] - 2026-11-24
 
 FriedJS carries a real-time game for the first time ("We Have Magic at

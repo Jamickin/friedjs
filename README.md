@@ -18,6 +18,9 @@ The core framework (`fried.js`) is fiercely protected from bloat. Advanced featu
 * `fried-virtual.js`: A windowed Virtual Scroller for rendering 100,000+ items without freezing the DOM.
 * `fried-router.js`: A lightweight Hash Router for building SPAs on zero-config static servers, with `:param` routes (`/plans/:id`) and query strings.
 * `fried-grid.js`: A character grid for real-time drawing: typed-array cells, per-cell light, Braille sub-cell dots, and a canvas renderer that redraws only the cells that changed.
+* `fried-raster.js`: Shapes in character cells (lines, ellipses, polygons, fat lines), so a figure can be drawn at any grid resolution.
+* `fried-light.js`: Lighting for a character grid: heights, normals, point lights that cast shadows, and a glyph for a brightness.
+* `fried-grid-ui.js`: An immediate-mode user interface drawn in the grid itself: panels, buttons, menus, scrolling text, text fields.
 * `fried-loop.js`: A frame loop with a fixed-step simulation tick that sits inside FriedJS's microtask batching (one virtual-DOM render per frame, at most).
 * `fried-pointer.js`: Tap, hold and drag per mouse button, with pointer capture, for a canvas or any element.
 

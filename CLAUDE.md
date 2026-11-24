@@ -77,6 +77,11 @@ what came from where and why, and it's short.
   browser only. Routes may use `:param` segments and a query string
   (`"/plans/:id"`, `#/done?agent=codex`); the view gets
   `{ params, query, path }`.
+- `addons/fried-raster.js`, `addons/fried-light.js`, `addons/fried-grid-ui.js`
+  -- optional, on top of `fried-grid`: shapes rasterised into cells at any
+  resolution; lighting with heights, normals and cast shadows, carried by
+  which glyph a cell gets; and an immediate-mode UI drawn in the grid
+  (for an app whose whole screen is characters).
 - `addons/fried-grid.js`, `addons/fried-loop.js`, `addons/fried-pointer.js`
   -- optional, for something that moves every frame (a game, a
   visualisation): a character-cell buffer with per-cell light and a canvas

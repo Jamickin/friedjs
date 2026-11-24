@@ -286,7 +286,7 @@ integers.
   dot a weight 0..1: `set`, `get`, `line`, `clear`, and `blit(grid,
   colorOf)`, which writes one Braille glyph per cell inked by the mean
   weight of its dots.
-- `createGridRenderer({ canvas, overlay?, font?, weight? })` -> draws
+- `createGridRenderer({ canvas, overlay?, font?, weight?, alpha? })` -> draws
   grids on a canvas. `resize(cols, rows, cssWidth, cssHeight, dpr)` fits
   whole device pixels per cell; `draw(grid)` redraws changed cells and
   returns how many; `sprites(list)` draws loose glyphs at fractional cell
@@ -301,6 +301,10 @@ integers.
   clamped.
 - `ramp(chars, t)` -> a glyph from a density ramp (`" .:-=+*#%@"`) by `t`
   in 0..1.
+
+- `TRANSPARENT` -- a background value for a cell that should show what is
+  under the canvas (create the renderer with `alpha: true`): one grid of
+  words laid over another grid.
 
 ## fried-loop.js — optional frame loop with a fixed simulation step
 
@@ -344,6 +348,90 @@ import { createPointer } from "./fried-pointer.js";
   on a `button`, `a`, `input`, `textarea`, `select` or `[data-pointer-free]`
   inside the element is left to that control. The callbacks are plain
   functions, so a pointermove never schedules a render.
+
+## fried-raster.js — optional shapes in character cells
+
+```js
+import { strokeLine, strokePath, strokeEllipse, fillEllipse, fillPoly, fillRect, fillCapsule, edgeGlyph } from "./fried-raster.js";
+```
+
+A figure drawn as a fixed block of characters is a fixed number of cells
+big, so the grid can never be made finer or coarser. These turn a SHAPE
+(in fractional cells) into cells at whatever size it comes out. Each takes
+a `put` callback, so they write into anything: a `fried-grid` buffer, a
+height field, a mask. `aspect` is cell height / cell width (2 by default).
+
+- `strokeLine(put, x0, y0, x1, y1, { aspect?, glyph?, glyphs? })` -- a
+  line; `put(x, y, glyph)` gets the glyph for the line's direction
+  (`-`, `|`, `/` or `\`), or `glyph` if you fix one.
+- `strokePath(put, points, opts, closed?)` -- joined lines.
+- `strokeEllipse(put, cx, cy, rx, ry, { aspect?, glyphs? })` -- an
+  outline, one glyph per side per row: a 9 x 3 ellipse comes out as
+  `.-----.` over `(       )` over a matching bottom row.
+- `fillEllipse(put, cx, cy, rx, ry)` -- `put(x, y, u, v)`, with (u, v) the
+  cell's place in the ellipse, -1..1 (for a height that rises to the middle).
+- `fillPoly(put, points)` and `fillRect(put, x0, y0, x1, y1)` -- `put(x, y)`.
+- `fillCapsule(put, x0, y0, x1, y1, half, aspect?)` -- a fat line with
+  round ends; `put(x, y, t, d)`: t along it (0..1), d across it (0..1).
+- `edgeGlyph(dx, dy, aspect?, glyphs?)` -- the glyph for a direction.
+- `EDGE` and `ROUND` -- the default glyph sets, to copy and change.
+
+## fried-light.js — optional lighting for a character grid
+
+```js
+import { createLighting, toneGlyph } from "./fried-light.js";
+```
+
+`fried-grid`'s `createLight` is a flat field: it knows where light falls,
+not what it falls on. This is a lighting system: every cell has a HEIGHT,
+so surfaces have normals (a lit side and a dark side) and things throw
+shadows; and brightness can be carried by which GLYPH a cell gets, with no
+cell background colour at all.
+
+- `createLighting(cols, rows, { aspect? })` -> `{ height, nx, ny, nz, r, g,
+  b, lum, shade, maxHeight, clearHeights, normals, ambient, addField, point,
+  finish }`. Each frame: write `height` (in rows), call `normals()`, then
+  `ambient(r, g, b)`, any `addField(lightField, k)` (a `createLight`
+  field worked out some other way: moonlight), one `point({ x, y, h,
+  radius, color, power, shadows })` per lamp (x, y in cells; h and radius
+  in rows), and `finish()`, which fills `lum`. `shade` (0.22) is how much
+  of a lamp still reaches a shadowed cell. Shadows walk the height field
+  toward the lamp, at most 24 steps a cell, only as far as the tallest
+  thing could reach.
+- `toneGlyph(chars, t, jitter?, bands?)` -- the glyph for a brightness
+  from a ramp of characters (nothing to dense); `jitter` (-0.5..0.5, a
+  stable hash of the cell) roughens the band edges, `bands` snaps to hard
+  steps first.
+
+## fried-grid-ui.js — optional user interface drawn in character cells
+
+```js
+import { createGridUi, wrapText } from "./fried-grid-ui.js";
+```
+
+When the whole screen is characters, the words, panels, menus and buttons
+belong in the grid too, and the virtual DOM cannot draw into a cell buffer.
+This is an immediate-mode UI: every frame you say what is on screen; each
+call both draws into a `fried-grid` buffer and answers what happened to it.
+Widgets are known by the id you pass.
+
+- `createGridUi(theme?)` -> `{ begin, end, tap, wheel, key, over, mute,
+  region, text, wrap, fill, box, button, row, slider, scroll, scrollTo,
+  input, theme, focus, hot }`. Per frame: `begin(grid, { x, y, down })`
+  (the pointer, in this grid's cells), the widgets, `end()`. From your
+  handlers: `tap(x, y)`, `wheel(x, y, dy)`, `key(event)` (true when a text
+  field took it), and `over(x, y)` to ask whether the UI is under a press
+  before the game behind it uses it. `button(id, x, y, label)` returns
+  true when clicked; `row(id, x, y, w, label, value)` returns -1 / +1 for
+  a click on the left / right of its value; `slider` returns the new
+  value; `scroll(id, x, y, w, h, total, { end, stick })` returns the first
+  line to show; `input(id, x, y, w, value, { h, placeholder, max })`
+  returns the edited text. `mute(true)` makes the widgets that follow
+  feel nothing (drawn, but no hover, click or wheel): mute what a modal
+  covers, un-mute, then draw the modal, and the click reaches the modal.
+  `theme` holds the colours; `ground` may be `fried-grid`'s `TRANSPARENT`.
+- `wrapText(text, width)` -> lines no wider than `width` cells.
+- `BOX` and `BOX_PLAIN` -- border glyph sets for `box`.
 
 ## Server addons (addons/server/) -- Node only
 

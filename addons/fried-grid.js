@@ -16,6 +16,10 @@
 
 // -- colour ------------------------------------------------------------------
 
+// A paper colour meaning "nothing here": a renderer made with { alpha: true }
+// clears such a cell instead of filling it, so a grid can lie over another.
+export const TRANSPARENT = 0x1000000;
+
 export const rgb = (r, g, b) => ((r & 255) << 16) | ((g & 255) << 8) | (b & 255);
 export const hex = (s) => parseInt(s.charAt(0) === "#" ? s.slice(1) : s, 16) & 0xffffff;
 const clamp255 = (v) => (v < 0 ? 0 : v > 255 ? 255 : v | 0);
@@ -243,6 +247,9 @@ export function createDots(cols, rows) {
 //            for sprites: glyphs at fractional cell positions (smooth motion
 //            that never dirties the cell layer underneath)
 //
+//   alpha    true lets cells whose paper is TRANSPARENT show what is behind
+//            the canvas (a UI grid over a scene grid)
+//
 // r.resize(cols, rows, cssWidth, cssHeight, dpr)   fit the grid to a box
 // r.draw(grid)       redraw the cells whose key changed; returns how many
 // r.sprites(list)    [{ x, y, ch, color, alpha?, scale?, add?, glow? }], x/y in cells
@@ -252,9 +259,9 @@ export function createDots(cols, rows) {
 
 const BRAILLE_DOT = [[0x01, 0, 0], [0x02, 0, 1], [0x04, 0, 2], [0x40, 0, 3], [0x08, 1, 0], [0x10, 1, 1], [0x20, 1, 2], [0x80, 1, 3]];
 
-export function createGridRenderer({ canvas, overlay = null, font = "monospace", weight = "400", makeCanvas = null }) {
+export function createGridRenderer({ canvas, overlay = null, font = "monospace", weight = "400", makeCanvas = null, alpha = false }) {
   const newCanvas = makeCanvas || (() => document.createElement("canvas"));
-  const ctx = canvas.getContext("2d", { alpha: false });
+  const ctx = canvas.getContext("2d", { alpha });
   const octx = overlay ? overlay.getContext("2d") : null;
   let cols = 0, rows = 0, cw = 0, chh = 0, dpr = 1, fontPx = 0;
   let pCh = null, pFg = null, pBg = null, full = true;
@@ -331,8 +338,11 @@ export function createGridRenderer({ canvas, overlay = null, font = "monospace",
       if (!full && c === pCh[i] && f === pFg[i] && b === pBg[i]) continue;
       pCh[i] = c; pFg[i] = f; pBg[i] = b;
       const x = (i % cols) * cw, y = ((i / cols) | 0) * chh;
-      if (b !== lastBg) { ctx.fillStyle = cssColor(b); lastBg = b; }
-      ctx.fillRect(x, y, cw, chh);
+      if (b === TRANSPARENT) ctx.clearRect(x, y, cw, chh);
+      else {
+        if (b !== lastBg) { ctx.fillStyle = cssColor(b); lastBg = b; }
+        ctx.fillRect(x, y, cw, chh);
+      }
       if (c !== 32 && c !== 0x2800 && f !== b) {
         const s = slotOf(c, f);
         ctx.drawImage(atlas, (s % perRow) * cw, Math.floor(s / perRow) * chh, cw, chh, x, y, cw, chh);

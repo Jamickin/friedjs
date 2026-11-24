@@ -175,3 +175,39 @@ Every change to FriedJS goes around one loop, and leaves an entry here.
 - tests: `tests/css-states.test.js` (5): plain dedupe unchanged, state and pseudo-element rules, the own-class rule, at-rules inserted once, an orphan state ignored.
 - gates run (this entry and entries 13-15, `FRIED_FRICTION_LOG` unset): `npm test` 167 pass, 0 fail (142 at 0.5.0, +25: grid 7, loop 6, pointer 7, css 5), docs-truth and version (0.6.0) green. `npm run build` passes (type check clean with the three addons included; bundle 37.95 KB / 13.27 KB gzip). `node stress.js` x3: 43/43 each; create 10,000 rows median 2.92 ms (baseline 4.3); append 1,000 median 2.92 ms (runs 2.83, 3.19, 2.92; baseline 2.2, +33%). That append figure is NOT from this change: the untouched `main` checkout measured 2.87, 2.92, 3.48 on the same machine in the same minute. Node is v26.13.0 here and the baseline was recorded on v24.11.0, so `evolution/baseline.md` needs re-recording (left alone; flagged to James). `node benchmark.js` x3, medians vs baseline: 1,000 cards 2.03 ms (2.27); 5,000 7.29 (8.24); 20,000 20.11 (24.7); 50,000 54.57 (61.6); 100,000 state updates 10.5 (25.2); 600 patcher cycles 306 to 309 (309.5). All within 25%.
 - consumers migrated: none needed: every existing export and call keeps its behaviour. `whmah-ascii` (spellcraft `fried-ascii/`, branch `fable/ascii-fried`) vendors 0.6.0 through `tooling/fried-sync.mjs`; its own 303 rule tests ran green on sync.
+
+## 17. fried-raster: figures are shapes, so the grid can be any resolution (0.7.0)
+- id: 17
+- date: 2026-11-24
+- friction evidence: `evolution/friction.jsonl` (consumer `whmah-ascii`, op `createGrid`): want "a setting that makes the ASCII finer and finer", error "every figure in the game was hand-placed glyphs, a fixed number of cells big, so the grid could only ever be 136 x 42".
+- change: new `addons/fried-raster.js`: `strokeLine`, `strokePath`, `strokeEllipse`, `fillEllipse`, `fillPoly`, `fillRect`, `fillCapsule`, `edgeGlyph`, `EDGE`, `ROUND`. Each takes a `put` callback and fractional cell coordinates, so the same call draws into a glyph buffer or a height field at any size. `strokeEllipse` picks one glyph per side per row by where the cell sits on the curve (a first version chose by the tangent and came out lopsided: caught by its test).
+- tests: `tests/fried-raster.test.js` (5): edge glyphs by direction and aspect, lines and paths, the 9 x 3 ellipse character for character and its symmetry at other sizes, fills (ellipse u/v, polygon, rect), a capsule's t and d.
+- gates run: see entry 20.
+- consumers migrated: none needed: additive. `whmah-ascii` now draws every figure with it.
+
+## 18. fried-light: heights, normals, cast shadows, and a glyph for a brightness (0.7.0)
+- id: 18
+- date: 2026-11-24
+- friction evidence: `evolution/friction.jsonl` (consumer `whmah-ascii`, op `createLight shade`): the player's words, "our lighting is off, and needs a system for it", and "I don't know if I'm a fan of using the background drops for colour, I'd rather have only ascii". `createLight` is a flat field (no heights, so no lit sides and no shadows; the game had faked shadows as dark quads) and `shade()` carries brightness on each cell's background.
+- change: new `addons/fried-light.js`: `createLighting(cols, rows, { aspect })` with a height per cell, `normals()`, `ambient()`, `addField()`, `point()` (falloff, facing, and a shadow walk through the height field of at most 24 steps a cell, bounded by the tallest thing in the scene), `finish()`; and `toneGlyph(chars, t, jitter, bands)`. `fried-grid`'s `createLight` and `shade` are unchanged (a precomputed field such as moonlight is still made with `createLight` and added with `addField`).
+- tests: `tests/fried-light.test.js` (5): normals of a slope, falloff with distance and facing, a tall thing shadowing what is behind it and not what is in front, `addField` and `finish`, `toneGlyph` bands and jitter.
+- gates run: see entry 20.
+- consumers migrated: none needed: additive.
+
+## 19. fried-grid-ui: when the whole screen is characters, the UI is too (0.7.0)
+- id: 19
+- date: 2026-11-24
+- friction evidence: `evolution/friction.jsonl` (consumer `whmah-ascii`, op `ui css`): the player's rule, "I want ONLY ascii in this game, so we might have to redo the ui and journal, all elements ASCII". The virtual DOM cannot draw into a cell buffer; a second line (op `createGridUi region`): a journal drawn over a log panel never got its clicks, because the panel underneath was declared first and consumed the tap.
+- change: new `addons/fried-grid-ui.js`: `createGridUi(theme)` (immediate mode: `begin`, widgets, `end`; `tap`, `wheel`, `key`, `over` from the app's handlers; `region`, `text`, `wrap`, `fill`, `box`, `button`, `row`, `slider`, `scroll`, `input`), `wrapText`, `BOX`, `BOX_PLAIN`. `mute(on)` makes the widgets that follow feel nothing, so what a modal covers can be drawn first and the modal still gets the click; `begin()` un-mutes. `addons/fried-grid.js` gains `TRANSPARENT` (a background value) and `createGridRenderer({ alpha })`, so the UI's grid is its own canvas over the room's, at its own cell size.
+- tests: `tests/fried-grid-ui.test.js` (8): wrapping, box and button, row halves, slider by click and wheel, scroll that sticks to the end, text field (typing, backspace, Enter, focus lost by a click elsewhere), `over`, a transparent cell clearing the canvas, and mute.
+- gates run: see entry 20.
+- consumers migrated: none needed: additive. `whmah-ascii` dropped its whole VDOM HUD (`hud.js`) for it; FriedJS core now only mounts the stage and its three canvases there.
+
+## 20. 0.7.0: what the second pass says about FriedJS
+- id: 20
+- date: 2026-11-24
+- friction evidence: the four `whmah-ascii` lines behind entries 17-19. The `fried-db` put/upsert line from 0.6.0 is still one consumer's evidence and still not acted on.
+- change: `VERSION` 0.7.0, `package.json`, `CHANGELOG.md`; docs in `docs/framework-api.md` (three new sections; `TRANSPARENT` and `alpha` in the fried-grid section), `README.md`, `CLAUDE.md`; `tests/docs-truth.test.js` maps the three new sections to their modules (and tests `fried-grid-ui.js` before `fried-grid.js`, since one heading starts with the other). Honest note for whoever reads this next: in this consumer the core (state, ui, mount, css) now does almost nothing: the app is a frame loop writing typed arrays. That is the right split, not a failure of the core, but it means the game stops being evidence about the VDOM. The addons are where its friction lands.
+- tests: 19 new (raster 5, light 5, grid-ui 8, plus the fried-grid transparent case inside grid-ui).
+- gates run: (`FRIED_FRICTION_LOG` unset) `npm test` 186 pass, 0 fail (167 at 0.6.0, +19). The first run failed docs-truth twice: a double-backtick code span in the new fried-raster section threw off the test's backtick pairing for the rest of the file; reworded, green. `npm run build` passes (exit 0, type check with the new addons included). `node stress.js`: 43/43; create 10,000 rows median 3.36 ms (baseline 4.3); append 1,000 median 2.96 ms (baseline 2.2, the same +33% recorded in entry 16 on untouched `main`: Node v26.13.0 against a baseline taken on v24.11.0, still to be re-recorded). `node benchmark.js` once, exit 0: 100,000 state updates 18.44 ms (25.2); 600 patcher cycles 315.97 ms (309.5). Each of these was run once this time, not three times.
+- consumers migrated: none needed: every existing export keeps its behaviour. `whmah-ascii` (spellcraft `fried-ascii/`, branch `fable/ascii-fried`) vendors 0.7.0 through `tooling/fried-sync.mjs`; its 391 rule tests ran green.
