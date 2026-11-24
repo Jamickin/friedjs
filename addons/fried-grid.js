@@ -49,7 +49,7 @@ export function quantize(c, bits) {
 const cssCache = new Map();
 export function cssColor(c) {
   let s = cssCache.get(c);
-  if (!s) { s = "#" + (c & 0xffffff).toString(16).padStart(6, "0"); cssCache.set(c, s); }
+  if (!s) { if (cssCache.size > 8192) cssCache.clear(); s = "#" + (c & 0xffffff).toString(16).padStart(6, "0"); cssCache.set(c, s); }
   return s;
 }
 // Pick a glyph from a density ramp (" .:-=+*#%@") by t in 0..1.
@@ -74,8 +74,8 @@ export function createGrid(cols, rows) {
     clear(ch = 32, fg = 0, bg = 0) { g.ch.fill(code(ch)); g.fg.fill(fg); g.bg.fill(bg); return g; },
     // bg left undefined keeps the cell's paper.
     set(x, y, ch, fg, bg) {
-      x |= 0; y |= 0;
-      if (x < 0 || y < 0 || x >= cols || y >= rows) return;
+      x = Math.floor(x); y = Math.floor(y);
+      if (!(x >= 0 && y >= 0 && x < cols && y < rows)) return;
       const i = y * cols + x;
       g.ch[i] = code(ch); g.fg[i] = fg;
       if (bg !== undefined) g.bg[i] = bg;
@@ -85,8 +85,15 @@ export function createGrid(cols, rows) {
       let k = 0;
       for (const c of text) { if (solid || c !== " ") g.set(x + k, y, c, fg, bg); k++; }
     },
+    // A rectangle of one cell: clipped once, then filled a row at a time.
     fill(x, y, w, h, ch, fg, bg) {
-      for (let yy = y; yy < y + h; yy++) for (let xx = x; xx < x + w; xx++) g.set(xx, yy, ch, fg, bg);
+      const x0 = Math.max(0, Math.floor(x)), x1 = Math.min(cols, Math.floor(x) + Math.floor(w)), y0 = Math.max(0, Math.floor(y)), y1 = Math.min(rows, Math.floor(y) + Math.floor(h)), c = code(ch);
+      if (!(x0 < x1 && y0 < y1)) return;
+      for (let yy = y0; yy < y1; yy++) {
+        const a = yy * cols + x0, b = yy * cols + x1;
+        g.ch.fill(c, a, b); g.fg.fill(fg, a, b);
+        if (bg !== undefined) g.bg.fill(bg, a, b);
+      }
     },
     copyFrom(o) { g.ch.set(o.ch); g.fg.set(o.fg); g.bg.set(o.bg); return g; },
   };
@@ -119,6 +126,7 @@ export function createLight(cols, rows, aspect = 2) {
     // A point light at (x, y) cells, reaching `radius` rows, falling off
     // smoothly to nothing at the edge. color is [r, g, b] floats.
     point(x, y, radius, color, power = 1) {
+      if (!(radius > 0)) return L;
       const rx = radius * aspect, x0 = Math.max(0, Math.floor(x - rx)), x1 = Math.min(cols - 1, Math.ceil(x + rx));
       const y0 = Math.max(0, Math.floor(y - radius)), y1 = Math.min(rows - 1, Math.ceil(y + radius));
       const inv = 1 / (radius * radius), cr = color[0] * power, cg = color[1] * power, cb = color[2] * power;
@@ -196,21 +204,35 @@ export function shade(src, light, out, { bits = 6, emissive = null, paper = 1 } 
 // Each cell holds 2 x 4 dots, so a dot layer has twice the columns and four
 // times the rows of the grid. Dots carry a weight (0..1): how hard the chalk
 // was pressed, how worn it is. blit() turns them into Braille glyphs, one per
-// cell, inked by the mean weight of the dots that are set.
+// cell, inked by the mean weight of the dots that are set. The layer keeps
+// the bounds of what was set, so clearing and blitting a few marks on a big
+// grid only costs those marks (if you write D.v yourself, call D.touch).
 
 const BRAILLE_BIT = [[0x01, 0x08], [0x02, 0x10], [0x04, 0x20], [0x40, 0x80]];
 
 export function createDots(cols, rows) {
   const w = cols * 2, h = rows * 4;
+  let bx0 = w, by0 = h, bx1 = -1, by1 = -1;          // the bounds of what has been set since the last clear
   const D = {
     cols, rows, w, h,
     v: new Float32Array(w * h),
-    clear() { D.v.fill(0); return D; },
+    clear() {
+      for (let y = by0; y <= by1; y++) D.v.fill(0, y * w + bx0, y * w + bx1 + 1);
+      bx0 = w; by0 = h; bx1 = -1; by1 = -1;
+      return D;
+    },
+    // Say that dots in this box (dot coordinates, inclusive) were written by hand.
+    touch(x0, y0, x1, y1) {
+      bx0 = Math.max(0, Math.min(bx0, Math.floor(x0))); by0 = Math.max(0, Math.min(by0, Math.floor(y0)));
+      bx1 = Math.min(w - 1, Math.max(bx1, Math.floor(x1))); by1 = Math.min(h - 1, Math.max(by1, Math.floor(y1)));
+      return D;
+    },
     set(x, y, weight = 1) {
       x = Math.floor(x); y = Math.floor(y);
-      if (x < 0 || y < 0 || x >= w || y >= h) return;
+      if (!(x >= 0 && y >= 0 && x < w && y < h)) return;
       const i = y * w + x;
       if (weight > D.v[i]) D.v[i] = weight;
+      if (x < bx0) bx0 = x; if (x > bx1) bx1 = x; if (y < by0) by0 = y; if (y > by1) by1 = y;
     },
     get(x, y) { return x < 0 || y < 0 || x >= w || y >= h ? 0 : D.v[y * w + x]; },
     // A line in dot coordinates (floats).
@@ -220,10 +242,12 @@ export function createDots(cols, rows) {
     },
     // Write the dots into a grid as Braille. colorOf(weight, cx, cy) gives the
     // ink for a cell; cells with no dots are left alone. Returns cells written.
+    // `grid` is anything with set(x, y, glyph, color), or just that function.
     blit(grid, colorOf, threshold = 0.05) {
       let written = 0;
-      for (let cy = 0; cy < rows; cy++) {
-        for (let cx = 0; cx < cols; cx++) {
+      const put = typeof grid === "function" ? grid : (x, y, g, c) => grid.set(x, y, g, c);
+      for (let cy = by0 >> 2; cy <= by1 >> 2; cy++) {
+        for (let cx = bx0 >> 1; cx <= bx1 >> 1; cx++) {
           let bits = 0, sum = 0, cnt = 0;
           for (let r = 0; r < 4; r++) {
             const o = (cy * 4 + r) * w + cx * 2;
@@ -231,7 +255,7 @@ export function createDots(cols, rows) {
             if (a > threshold) { bits |= BRAILLE_BIT[r][0]; sum += a; cnt++; }
             if (b > threshold) { bits |= BRAILLE_BIT[r][1]; sum += b; cnt++; }
           }
-          if (bits) { grid.set(cx, cy, 0x2800 + bits, colorOf(sum / cnt, cx, cy)); written++; }
+          if (bits) { put(cx, cy, 0x2800 + bits, colorOf(sum / cnt, cx, cy)); written++; }
         }
       }
       return written;
@@ -254,7 +278,8 @@ export function createDots(cols, rows) {
 // r.draw(grid)       redraw the cells whose key changed; returns how many
 // r.sprites(list)    [{ x, y, ch, color, alpha?, scale?, add?, glow? }], x/y in cells
 // r.cellAt(clientX, clientY) -> { x, y } in (fractional) cells
-// r.invalidate()     force a full redraw next frame
+// r.invalidate()     force a full redraw next frame; invalidate({ atlas: true })
+//                    also draws every glyph afresh (a web font has arrived)
 // r.stats            { drawn, cells, atlas }
 
 const BRAILLE_DOT = [[0x01, 0, 0], [0x02, 0, 1], [0x04, 0, 2], [0x40, 0, 3], [0x08, 1, 0], [0x10, 1, 1], [0x20, 1, 2], [0x80, 1, 3]];
@@ -281,7 +306,9 @@ export function createGridRenderer({ canvas, overlay = null, font = "monospace",
 
   function resize(c, r, cssW, cssH, ratio = 1) {
     dpr = ratio;
-    const ncw = Math.max(2, Math.floor(cssW * dpr / c)), nch = Math.max(4, Math.floor(cssH * dpr / r));
+    // (A hair is added before flooring: a size worked out as cells times
+    // whole pixels must not come back one pixel short.)
+    const ncw = Math.max(2, Math.floor(cssW * dpr / c + 1e-6)), nch = Math.max(4, Math.floor(cssH * dpr / r + 1e-6));
     if (c === cols && r === rows && ncw === cw && nch === chh) return false;
     cols = c; rows = r; cw = ncw; chh = nch;
     fontPx = Math.max(4, Math.floor(Math.min(chh * 0.86, cw * 1.72)));
@@ -360,6 +387,7 @@ export function createGridRenderer({ canvas, overlay = null, font = "monospace",
     octx.textAlign = "center"; octx.textBaseline = "middle";
     let lastFont = "";
     for (const s of list) {
+      if (s.alpha !== undefined && s.alpha <= 0) continue;
       const px = Math.round(fontPx * (s.scale || 1)), f = `${weight} ${px}px ${font}`;
       if (f !== lastFont) { octx.font = f; lastFont = f; }
       octx.globalAlpha = s.alpha === undefined ? 1 : s.alpha;
@@ -376,5 +404,5 @@ export function createGridRenderer({ canvas, overlay = null, font = "monospace",
     return { x: (clientX - r.left) / r.width * cols, y: (clientY - r.top) / r.height * rows };
   }
 
-  return { resize, draw, sprites, cellAt, invalidate() { full = true; }, stats, get cell() { return { w: cw / dpr, h: chh / dpr }; } };
+  return { resize, draw, sprites, cellAt, invalidate(o) { full = true; if (o && o.atlas) buildAtlas(); }, stats, get cell() { return { w: cw / dpr, h: chh / dpr }; } };
 }

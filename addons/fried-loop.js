@@ -70,8 +70,10 @@ export function createLoop({ update = null, render = null, step = 1 / 60, maxSte
 
   function frame(ms) {
     if (!running) return;
-    tick(ms === undefined ? clock() : ms);
-    handle = requestFrame(frame);
+    // (The next frame is asked for whatever happens in this one: an update
+    // that throws once must not leave a loop that says it is running and is not.)
+    try { tick(ms === undefined ? clock() : ms); }
+    finally { if (running) handle = requestFrame(frame); }
   }
 
   function onVisibility() {

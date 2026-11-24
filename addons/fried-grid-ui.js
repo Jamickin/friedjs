@@ -39,12 +39,14 @@ export const BOX_PLAIN = { tl: "+", tr: "+", bl: "+", br: "+", h: "-", v: "|" };
 export function wrapText(text, width) {
   const out = [];
   for (const para of String(text).split("\n")) {
-    let line = "";
+    let line = "", n = 0;                              // n: how many characters `line` is (counted once, not per word)
     for (const word of para.split(/\s+/)) {
       if (!word) continue;
-      if (line && [...line].length + 1 + [...word].length > width) { out.push(line); line = word; }
-      else line = line ? line + " " + word : word;
-      while ([...line].length > width) { const cs = [...line]; out.push(cs.slice(0, width).join("")); line = cs.slice(width).join(""); }
+      const wl = /[\ud800-\udfff]/.test(word) ? [...word].length : word.length;
+      if (n && n + 1 + wl > width) { out.push(line); line = word; n = wl; }
+      else if (n) { line += " " + word; n += 1 + wl; }
+      else { line = word; n = wl; }
+      while (n > width && width > 0) { const cs = [...line]; out.push(cs.slice(0, width).join("")); line = cs.slice(width).join(""); n = cs.length - width; }
     }
     out.push(line);
   }
@@ -60,14 +62,17 @@ export function createGridUi(theme = {}) {
   let grid = null, ptr = { x: -1, y: -1, down: false }, muted = false;
   let taps = [], wheels = [], keys = [];
   let regions = [], lastRegions = [];
-  const scroll = new Map(), carets = new Map();
+  const scroll = new Map();
+  let fields = new Set();                          // the text fields drawn this frame
   const len = (s) => [...s].length;
   const inside = (r, x, y) => x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h;
 
-  ui.begin = (g, pointer = ptr) => { grid = g; ptr = pointer; regions = []; ui.hot = null; muted = false; };
+  ui.begin = (g, pointer = ptr) => { grid = g; ptr = pointer; regions = []; ui.hot = null; muted = false; fields = new Set(); };
   ui.mute = (on = true) => { muted = !!on; };
-  ui.end = () => { lastRegions = regions; taps = []; wheels = []; keys = []; };
-  ui.tap = (x, y) => { taps.push({ x, y }); };
+  // (A field that was being typed in and is no longer drawn lets go of the
+  // keyboard, or every key after would vanish into it.)
+  ui.end = () => { lastRegions = regions; taps = []; wheels = []; keys = []; if (ui.focus !== null && !fields.has(ui.focus)) ui.focus = null; };
+  ui.tap = (x, y, button = 0) => { taps.push({ x, y, button }); };
   ui.wheel = (x, y, dy) => { wheels.push({ x, y, dy }); };
   // Is any part of the UI under these cells? (As of the last frame drawn.)
   ui.over = (x, y) => lastRegions.some((r) => inside(r, x, y));
@@ -79,17 +84,18 @@ export function createGridUi(theme = {}) {
   };
 
   // Mark a rectangle as belonging to the UI and report what the pointer is
-  // doing to it: { hot, clicked, wheel }.
+  // doing to it: { hot, clicked, wheel, tap }. `tap` is the tap that clicked
+  // it ({ x, y, button }), or null.
   ui.region = (id, x, y, w, h) => {
     const r = { id, x, y, w, h };
     regions.push(r);
-    if (muted) return { hot: false, clicked: false, wheel: 0 };
+    if (muted) return { hot: false, clicked: false, wheel: 0, tap: null };
     const hot = inside(r, ptr.x, ptr.y);
     if (hot && id !== null) ui.hot = id;
-    let clicked = false, wheel = 0;
-    for (const t of taps) if (!t.used && inside(r, t.x, t.y) && id !== null) { clicked = true; t.used = true; }
+    let clicked = false, wheel = 0, tap = null;
+    for (const t of taps) if (!t.used && inside(r, t.x, t.y) && id !== null) { clicked = true; t.used = true; tap = t; }
     for (const wv of wheels) if (!wv.used && inside(r, wv.x, wv.y) && id !== null) { wheel += wv.dy; wv.used = true; }
-    return { hot, clicked, wheel };
+    return { hot, clicked, wheel, tap };
   };
 
   ui.text = (x, y, text, fg = ui.theme.ink, bg) => { grid.put(x, y, String(text), fg, bg, bg !== undefined); return len(String(text)); };
@@ -132,12 +138,13 @@ export function createGridUi(theme = {}) {
     grid.put(x + 1, y, (on ? "▸ " : "  ") + label, on ? t.accent : t.ink, bg, true);
     if (value) grid.put(x + w - 1 - len(value), y, value, on ? t.accent : t.dim, bg, true);
     if (!r.clicked) return 0;
-    return value && ptr.x < x + w - 2 - len(value) / 2 && ptr.x >= x + w - 2 - len(value) ? -1 : 1;
+    const at = r.tap ? r.tap.x : ptr.x, v0 = x + w - 1 - len(value);     // where the tap landed; where the value starts
+    return value && at >= v0 && at < v0 + len(value) / 2 ? -1 : 1;
   };
 
   // A slider: [====----]. Returns the new value (0..1).
   ui.slider = (id, x, y, w, value, opts = {}) => {
-    const t = ui.theme, r = ui.region(id, x, y, w, 1), inner = w - 2;
+    const t = ui.theme, r = ui.region(id, x, y, w, 1), inner = Math.max(0, w - 2);
     let v = Math.max(0, Math.min(1, value));
     if (r.clicked || (r.hot && ptr.down)) v = Math.max(0, Math.min(1, (ptr.x - x - 1) / Math.max(1, inner - 1)));
     v = Math.max(0, Math.min(1, v + (r.wheel ? -Math.sign(r.wheel) * 0.05 : 0)));
@@ -167,9 +174,10 @@ export function createGridUi(theme = {}) {
   // (possibly edited) value. opts: { h (rows; wraps), placeholder, max }.
   ui.input = (id, x, y, w, value, opts = {}) => {
     const t = ui.theme, h = opts.h || 1, r = ui.region(id, x, y, w, h);
-    if (r.clicked) { ui.focus = id; carets.set(id, len(value)); }
+    fields.add(id);
+    if (r.clicked) ui.focus = id;
     else if (ui.focus === id && taps.some((p) => !inside({ x, y, w, h }, p.x, p.y))) ui.focus = null;
-    let v = String(value || "");
+    let v = String(value == null ? "" : value);
     if (ui.focus === id) {
       for (const k of keys) {
         if (k.key === "Enter" && h === 1) ui.focus = null;
@@ -184,7 +192,11 @@ export function createGridUi(theme = {}) {
     const lines = wrapText(v, w - 1), from = Math.max(0, lines.length - h);
     if (!v && ui.focus !== id && opts.placeholder) grid.put(x, y, opts.placeholder, t.faint, bg, false);
     for (let i = from; i < lines.length; i++) grid.put(x, y + i - from, lines[i], t.ink, bg, false);
-    if (ui.focus === id) { const last = lines[lines.length - 1] || ""; grid.set(Math.min(x + w - 1, x + len(last)), y + Math.min(h - 1, lines.length - 1 - from), "▏", t.accent, bg); }
+    if (ui.focus === id) {
+      // The caret sits after what was typed, spaces at the end included (wrapping drops them).
+      const last = lines[lines.length - 1] || "", trail = (/[ \t]+$/.exec(v.slice(v.lastIndexOf("\n") + 1)) || [""])[0].length;
+      grid.set(Math.min(x + w - 1, x + len(last) + trail), y + Math.min(h - 1, lines.length - 1 - from), "▏", t.accent, bg);
+    }
     return v;
   };
 

@@ -104,3 +104,15 @@ test("fried-loop: many state changes in one frame make one FriedJS render", asyn
   assert.equal(renders, 1);
   loop.stop(); off();
 });
+
+test("fried-loop: a frame that throws does not kill the loop", () => {
+  const c = crank();
+  let n = 0;
+  const loop = createLoop({ update: () => { if (++n === 1) throw new Error("one bad step"); }, step: 1 / 60, raf: c.raf, caf: c.caf, now: c.now, doc: null });
+  loop.start();
+  assert.throws(() => c.frame(17), /one bad step/);
+  assert.ok(c.pending, "the next frame was still asked for");
+  c.frame(17);
+  assert.ok(n >= 2 && loop.running);
+  loop.stop();
+});

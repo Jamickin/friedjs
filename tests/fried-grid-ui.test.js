@@ -117,3 +117,38 @@ test("fried-grid-ui: muted widgets are drawn but feel nothing, so a modal drawn 
   assert.equal(ui.button("again", 2, 1, "again"), true);
   ui.end();
 });
+
+test("fried-grid-ui: a text field with no value, a slider too narrow to draw, a field that goes away", () => {
+  const g = createGrid(30, 6).clear(" ", 0, 0), ui = createGridUi();
+  ui.begin(g, { x: 3, y: 1, down: false }); ui.tap(3, 1);
+  assert.equal(ui.input("note", 1, 1, 12, undefined), "", "undefined is an empty field, not a crash");
+  ui.end();
+  assert.equal(ui.focus, "note");
+  ui.begin(g, { x: 0, y: 0, down: false });
+  assert.equal(ui.slider("s", 1, 3, 1, 0.5), 0.5);                            // one cell wide: nothing to drag, nothing thrown
+  ui.end();                                                                   // "note" was not drawn this frame
+  assert.equal(ui.focus, null, "a field no longer drawn lets go of the keyboard");
+  assert.equal(ui.key({ key: "j" }), false);
+});
+
+test("fried-grid-ui: the caret follows a typed space; a region hands back its tap", () => {
+  const g = createGrid(30, 4).clear(" ", 0, 0), ui = createGridUi();
+  ui.begin(g, { x: 3, y: 1, down: false }); ui.tap(3, 1, 2);
+  const r = ui.region("probe", 0, 0, 30, 4);
+  assert.deepEqual([r.clicked, r.tap.x, r.tap.y, r.tap.button], [true, 3, 1, 2]);
+  ui.end();
+  ui.begin(g); ui.tap(3, 1); ui.input("f", 1, 1, 12, "hi"); ui.end();
+  ui.key({ key: " " });
+  ui.begin(g); const v = ui.input("f", 1, 1, 12, "hi"); ui.end();
+  assert.equal(v, "hi ");
+  ui.begin(g); ui.input("f", 1, 1, 12, v); ui.end();
+  assert.equal(row(g, 1, 1, 5), "hi ▏", "the caret is after the space");
+});
+
+test("fried-grid-ui: a menu row's left half of its value is exactly where the value is drawn", () => {
+  const g = createGrid(30, 3).clear(" ", 0, 0), ui = createGridUi();
+  const click = (x) => { ui.begin(g, { x: 0, y: 0, down: false }); ui.tap(x, 1); const d = ui.row("look", 0, 1, 30, "Look", "‹ abcd ›"); ui.end(); return d; };
+  click(0);
+  assert.equal(row(g, 1, 21, 29), "‹ abcd ›");                                // the value is 8 cells, in columns 21..28
+  assert.deepEqual([click(20), click(21), click(24), click(25), click(28)], [1, -1, -1, 1, 1]);
+});

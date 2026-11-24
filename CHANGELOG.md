@@ -7,6 +7,57 @@ equal `package.json`'s `version` and `fried.js`'s `VERSION` export
 (`tests/version.test.js` checks it). Why each change was made is in
 `evolution/EVOLUTION.md`.
 
+## [0.8.0] - 2026-11-24
+
+The game's player came back from his first hour with it: a right-button
+hold "doesn't work yet", turning a stone showed nothing, and "check the
+fried tools if they can't be better". An independent review of the six
+game addons followed (`evolution/EVOLUTION.md` entries 21-23). Additive,
+with two defaults changed: cast shadows are now a sweep (`shadows: "walk"`
+keeps the old ones), and `createGrid`'s `set` floors its coordinates
+(`set(-0.5, 0)` used to land in column 0; it is off the grid now).
+
+### Added
+- `addons/fried-pointer.js`: `dragPx` may be a function of the button
+  (`Infinity`: that button never drags, so a wobbling mouse keeps its tap
+  and its hold); `onlostpointercapture` in `props`.
+- `addons/fried-raster.js`: `strokePoly`, the rounded one-glyph-a-side
+  outline of any closed shape, on the rim of what `fillPoly` covers.
+- `addons/fried-light.js`: `spill(emissive, k, radius)`; `point({ shadows:
+  "walk" })`.
+- `addons/fried-grid.js`: `createDots().touch`; `blit` takes a plain
+  function; `renderer.invalidate({ atlas: true })`.
+- `addons/fried-grid-ui.js`: `tap(x, y, button)`; `region()` also returns
+  the `tap` that clicked it.
+
+### Changed
+- `addons/fried-light.js`: `point()` casts shadows with a horizon sweep
+  from the light instead of a walk from every cell: about a third of the
+  cost (5.9 ms to 2.2 ms for three candles at 313 x 101), and a thing one
+  cell wide now throws a whole shadow instead of a striped one.
+- `addons/fried-grid.js`: `createDots` clears and blits only the bounds of
+  what was set; `fill` clips once and fills by row; `set` floors.
+- `addons/fried-raster.js`: `fillCapsule` compares squared distances.
+
+### Fixed
+- `addons/fried-pointer.js`: a second mouse button pressed or released
+  while another is held (which a browser reports as a pointermove) is its
+  own press with its own end; before, it was never seen and could leave
+  the first press open for good. A new press on a button ends the one it
+  replaces. When the last button comes up, any press still open is ended.
+- `addons/fried-grid-ui.js`: a focused text field that stops being drawn
+  no longer keeps every key; `input` with an undefined value and a
+  `slider` narrower than two cells no longer throw; the caret follows a
+  typed space; a `row`'s left half is where its value is drawn (it was
+  one cell to the left).
+- `addons/fried-grid.js`: a light of radius 0 no longer writes NaN; the
+  renderer's `resize` no longer loses a pixel to rounding; sprites with
+  no alpha are skipped; `cssColor`'s cache is bounded.
+- `addons/fried-raster.js`: a shape with a coordinate that is not finite
+  draws nothing instead of looping for ever.
+- `addons/fried-loop.js`: a frame that throws no longer leaves a loop
+  that says it is running and is not.
+
 ## [0.7.0] - 2026-11-24
 
 The game's second pass: its player asked for a screen that is ONLY

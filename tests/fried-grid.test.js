@@ -134,3 +134,41 @@ test("fried-grid: the renderer redraws only the cells whose key changed", () => 
   assert.equal(overlay.calls.fillText, 1);
   assert.equal(overlay.calls.clearRect, 1);
 });
+
+test("fried-grid: fill clips to the grid; a negative fraction is outside it, not column 0", () => {
+  const g = createGrid(6, 3).clear(" ", 0, 0);
+  g.fill(-2, 1, 5, 9, "#", 7, 9);
+  assert.equal(String.fromCodePoint(...g.ch), "      " + "###   " + "###   ");
+  assert.equal(g.bg[6], 9); assert.equal(g.bg[0], 0);
+  g.fill(4, 0, 0, 3, "x", 1); g.fill(9, 0, 3, 3, "x", 1);                     // nothing to fill
+  assert.equal(String.fromCodePoint(...g.ch.slice(0, 6)), "      ");
+  g.fill(4, 0, 2, 1, "=", 3);                                                 // no bg given: the paper stays
+  assert.equal(g.bg[4], 0); assert.equal(g.fg[4], 3);
+  g.set(-0.5, 0, "!", 1);
+  assert.equal(g.ch[0], 32, "x = -0.5 is off the left edge");
+  g.set(NaN, 0, "!", 1);
+  assert.equal(g.ch[0], 32);
+});
+
+test("fried-grid: dots remember what was set, so clear and blit only touch that", () => {
+  const D = createDots(40, 20), seen = [];
+  D.line(20, 20, 26, 20);                                                     // dots, in cells 10..13 of row 5
+  assert.equal(D.blit((x, y) => seen.push([x, y]), () => 1), 4);
+  assert.deepEqual(seen.map((c) => c[0]), [10, 11, 12, 13]);
+  assert.ok(seen.every((c) => c[1] === 5));
+  D.clear();
+  assert.ok(D.v.every((v) => v === 0), "cleared");
+  assert.equal(D.blit(() => {}, () => 1), 0);
+  D.v[0] = 1;                                                                 // written by hand: say so
+  assert.equal(D.blit(() => {}, () => 1), 0);
+  D.touch(0, 0, 0, 0);
+  assert.equal(D.blit(() => {}, () => 1), 1);
+  D.clear(); D.set(-3, -3); D.set(1e9, 1e9); D.set(NaN, 2);
+  assert.equal(D.blit(() => {}, () => 1), 0, "out of range sets leave no bounds");
+});
+
+test("fried-grid: a light with no radius adds nothing (and no NaN)", () => {
+  const L = createLight(8, 4);
+  L.clear(0); L.point(4.5, 2.5, 0, [1, 1, 1]);
+  assert.ok(L.r.every((v) => v === 0));
+});

@@ -18,6 +18,15 @@
 // press is { button, start, at, t0, moved, held, dragging, data } -- `data` is
 // yours: set it in onDown and read it in the later callbacks of that press.
 //
+// dragPx may be a function of the button: return Infinity for a button that
+// never drags, and no amount of wobble will cost it its tap or its hold (a
+// hand that only clicks and holds should not need a steady mouse).
+//
+// A mouse reports only its FIRST button down and its LAST button up as
+// pointerdown / pointerup; a second button pressed or let go in between
+// arrives as a pointermove that names the button. Those are turned back into
+// a down and an up here, so two buttons at once are two presses, each ended.
+//
 // The callbacks are plain functions, not actions: a pointermove fires far
 // more often than the screen refreshes, and nothing here should schedule a
 // FriedJS render. Set state() cells inside them when the UI must change.
@@ -35,6 +44,15 @@ export function createPointer(opts = {}) {
   const call = (name, ...args) => { const fn = opts[name]; if (fn) fn(...args); };
   const presses = new Map();
   const ptr = { at: null, inside: false, presses, props: {}, cancel };
+  const slop = (button) => (typeof dragPx === "function" ? dragPx(button) : dragPx);
+  const BIT = [1, 4, 2, 8, 16];                     // e.button -> its bit in e.buttons
+  // A press that is over, however it ended: no tap.
+  function end(press, p, e) {
+    clearTimer(press.timer);
+    if (presses.get(press.button) === press) presses.delete(press.button);
+    if (press.dragging) call("onDragEnd", p, press, e);
+    call("onUp", p, press, e);
+  }
 
   function local(e) { return toLocal(e.clientX, e.clientY, e.currentTarget || e.target); }
 
@@ -52,7 +70,7 @@ export function createPointer(opts = {}) {
     const p = local(e);
     ptr.at = p; ptr.inside = true;
     const old = presses.get(e.button);
-    if (old) clearTimer(old.timer);
+    if (old) end(old, old.at, null);                // its release never reached us: finish it first
     const press = { button: e.button, start: p, at: p, px: e.clientX, py: e.clientY, t0: now(), moved: false, held: false, dragging: false, data: null, timer: 0 };
     presses.set(e.button, press);
     const el = e.currentTarget || e.target;
@@ -66,11 +84,17 @@ export function createPointer(opts = {}) {
   }
 
   function move(e) {
+    // Another button went down or came up while one was held.
+    if (e.button >= 0 && e.buttons !== undefined && BIT[e.button]) {
+      const isDown = (e.buttons & BIT[e.button]) !== 0;
+      if (isDown && !presses.has(e.button)) return down(e);
+      if (!isDown && presses.has(e.button)) return up(e);
+    }
     const p = local(e);
     ptr.at = p; ptr.inside = true;
     for (const press of presses.values()) {
       press.at = p;
-      if (!press.moved && Math.hypot(e.clientX - press.px, e.clientY - press.py) > dragPx) {
+      if (!press.moved && Math.hypot(e.clientX - press.px, e.clientY - press.py) > slop(press.button)) {
         press.moved = true;
         clearTimer(press.timer);
         if (!press.held) { press.dragging = true; call("onDragStart", press.start, press, e); }
@@ -91,15 +115,13 @@ export function createPointer(opts = {}) {
     if (press.dragging) call("onDragEnd", p, press, e);
     else if (!press.held && !press.moved) call("onTap", p, press, e);
     call("onUp", p, press, e);
+    // No button is down any more: whatever press is still open missed its release.
+    if (e.buttons === 0) for (const left of [...presses.values()]) end(left, p, e);
   }
 
   // Every press ends without a tap (the pointer was taken away from us).
   function cancel() {
-    for (const press of presses.values()) {
-      clearTimer(press.timer);
-      if (press.dragging) call("onDragEnd", press.at, press, null);
-      call("onUp", press.at, press, null);
-    }
+    for (const press of [...presses.values()]) end(press, press.at, null);
     presses.clear();
   }
 
@@ -108,6 +130,7 @@ export function createPointer(opts = {}) {
     onpointermove: move,
     onpointerup: up,
     onpointercancel: cancel,
+    onlostpointercapture: () => { if (presses.size) cancel(); },
     onpointerleave: () => { ptr.inside = false; call("onLeave"); },
     oncontextmenu: (e) => { if (preventContextMenu && e.preventDefault) e.preventDefault(); },
     onwheel: (e) => { call("onWheel", local(e), e.deltaY, e); },

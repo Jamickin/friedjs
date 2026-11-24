@@ -285,14 +285,18 @@ integers.
 - `createDots(cols, rows)` -> a sub-cell layer, 2 x 4 dots per cell, each
   dot a weight 0..1: `set`, `get`, `line`, `clear`, and `blit(grid,
   colorOf)`, which writes one Braille glyph per cell inked by the mean
-  weight of its dots.
+  weight of its dots (`grid` is anything with `set(x, y, glyph, color)`,
+  or that function itself). The layer remembers the bounds of what was
+  set, so `clear` and `blit` cost only the marks, not the whole grid;
+  after writing `v` directly, call `touch(x0, y0, x1, y1)`.
 - `createGridRenderer({ canvas, overlay?, font?, weight?, alpha? })` -> draws
   grids on a canvas. `resize(cols, rows, cssWidth, cssHeight, dpr)` fits
   whole device pixels per cell; `draw(grid)` redraws changed cells and
   returns how many; `sprites(list)` draws loose glyphs at fractional cell
   positions on the `overlay` canvas (`{ x, y, ch, color, alpha?, scale?,
   add?, glow? }`), so smooth motion never dirties the cell layer;
-  `cellAt(clientX, clientY)`, `invalidate()`, `stats`. Each glyph in each
+  `cellAt(clientX, clientY)`, `invalidate()` (pass `{ atlas: true }` to
+  draw every glyph afresh too, once a web font has loaded), `stats`. Each glyph in each
   colour is drawn once into an atlas and blitted from then on; Braille and
   block characters are drawn as rectangles, so they tile whatever the font.
 - `rgb(r, g, b)`, `hex("#rrggbb")`, `cssColor(c)` -> colour conversion.
@@ -320,7 +324,8 @@ import { createLoop } from "./fried-loop.js";
   while the page is hidden and, after a stall, drops time rather than
   running more than `maxSteps` steps. `tick(ms)` runs one frame by hand
   (tests, stepping while paused). `stats` has smoothed `fps`, `updateMs`,
-  `renderMs`.
+  `renderMs`. A frame that throws does not stop the loop: the next frame
+  is asked for all the same.
 
 Everything `update` and `render` do happens inside one animation-frame
 callback, and FriedJS flushes its render in the microtask right after it,
@@ -339,7 +344,9 @@ import { createPointer } from "./fried-pointer.js";
   Spread `props` onto the element: `ui("canvas", { key: "view",
   ...ptr.props })`. Per mouse button, a press becomes a tap (`onTap`), a
   hold (`onHold`, after `holdMs`, 450 by default, without moving) or a
-  drag (`onDragStart`, `onDrag`, `onDragEnd`, past `dragPx`); `onDown`,
+  drag (`onDragStart`, `onDrag`, `onDragEnd`, past `dragPx`, a number of
+  pixels or a function of the button: return `Infinity` for a button that
+  never drags, and no wobble of the mouse costs it its tap or hold); `onDown`,
   `onMove`, `onUp`, `onWheel` and `onLeave` are also called. `toLocal(
   clientX, clientY, element)` converts positions once for every callback
   (to grid cells, say). Each callback gets the position and the press
@@ -347,12 +354,17 @@ import { createPointer } from "./fried-pointer.js";
   The pointer is captured for the length of a press. A press that starts
   on a `button`, `a`, `input`, `textarea`, `select` or `[data-pointer-free]`
   inside the element is left to that control. The callbacks are plain
-  functions, so a pointermove never schedules a render.
+  functions, so a pointermove never schedules a render. Two buttons at
+  once are two presses: a mouse reports only its first button down and its
+  last button up as down and up events (the ones between arrive as moves
+  that name the button), and those are turned back into a down and an up
+  here, so no press is left open. Losing the pointer capture ends every
+  press, as `cancel()` does.
 
 ## fried-raster.js — optional shapes in character cells
 
 ```js
-import { strokeLine, strokePath, strokeEllipse, fillEllipse, fillPoly, fillRect, fillCapsule, edgeGlyph } from "./fried-raster.js";
+import { strokeLine, strokePath, strokeEllipse, strokePoly, fillEllipse, fillPoly, fillRect, fillCapsule, edgeGlyph } from "./fried-raster.js";
 ```
 
 A figure drawn as a fixed block of characters is a fixed number of cells
@@ -368,6 +380,11 @@ height field, a mask. `aspect` is cell height / cell width (2 by default).
 - `strokeEllipse(put, cx, cy, rx, ry, { aspect?, glyphs? })` -- an
   outline, one glyph per side per row: a 9 x 3 ellipse comes out as
   `.-----.` over `(       )` over a matching bottom row.
+- `strokePoly(put, points, { aspect?, glyphs?, smallBelow? })` -- the same
+  kind of outline for any closed shape (a lumpy stone, a crumpled rag,
+  an ellipse you have turned): one glyph per side per row, soft corners
+  when the shape is small, and every outline cell is a cell `fillPoly`
+  covers, so a fill and its outline line up.
 - `fillEllipse(put, cx, cy, rx, ry)` -- `put(x, y, u, v)`, with (u, v) the
   cell's place in the ellipse, -1..1 (for a height that rises to the middle).
 - `fillPoly(put, points)` and `fillRect(put, x0, y0, x1, y1)` -- `put(x, y)`.
@@ -375,6 +392,9 @@ height field, a mask. `aspect` is cell height / cell width (2 by default).
   round ends; `put(x, y, t, d)`: t along it (0..1), d across it (0..1).
 - `edgeGlyph(dx, dy, aspect?, glyphs?)` -- the glyph for a direction.
 - `EDGE` and `ROUND` -- the default glyph sets, to copy and change.
+
+A shape with a coordinate that is not finite, or with no size, draws
+nothing.
 
 ## fried-light.js — optional lighting for a character grid
 
@@ -390,14 +410,23 @@ cell background colour at all.
 
 - `createLighting(cols, rows, { aspect? })` -> `{ height, nx, ny, nz, r, g,
   b, lum, shade, maxHeight, clearHeights, normals, ambient, addField, point,
-  finish }`. Each frame: write `height` (in rows), call `normals()`, then
+  spill, finish }`. Each frame: write `height` (in rows), call `normals()`, then
   `ambient(r, g, b)`, any `addField(lightField, k)` (a `createLight`
   field worked out some other way: moonlight), one `point({ x, y, h,
   radius, color, power, shadows })` per lamp (x, y in cells; h and radius
-  in rows), and `finish()`, which fills `lum`. `shade` (0.22) is how much
-  of a lamp still reaches a shadowed cell. Shadows walk the height field
-  toward the lamp, at most 24 steps a cell, only as far as the tallest
-  thing could reach.
+  in rows), `spill(emissive, k, radius)` for whatever shines by itself,
+  and `finish()`, which fills `lum`. `shade` (0.22) is how much
+  of a lamp still reaches a shadowed cell. Shadows are a sweep: outward
+  from the lamp along a ray to every cell on the edge of its reach,
+  keeping the horizon, so every cell on a ray is visited and a thing one
+  cell wide throws a whole shadow. `shadows: false` casts none;
+  `shadows: "walk"` is the older way (from each cell a walk toward the
+  lamp of at most 24 steps: about three times dearer, and it can step
+  over a thing narrower than its stride). For `spill(emissive, k = 1,
+  radius = 2)`, `emissive` is a colour per cell (0 for none); each
+  shining cell gives `k` of its colour to the cells within `radius` rows,
+  most to the nearest. It costs only the cells that shine (a blur of a
+  whole field costs every cell, every pass).
 - `toneGlyph(chars, t, jitter?, bands?)` -- the glyph for a brightness
   from a ramp of characters (nothing to dense); `jitter` (-0.5..0.5, a
   stable hash of the cell) roughens the band edges, `bands` snaps to hard
@@ -419,7 +448,7 @@ Widgets are known by the id you pass.
   region, text, wrap, fill, box, button, row, slider, scroll, scrollTo,
   input, theme, focus, hot }`. Per frame: `begin(grid, { x, y, down })`
   (the pointer, in this grid's cells), the widgets, `end()`. From your
-  handlers: `tap(x, y)`, `wheel(x, y, dy)`, `key(event)` (true when a text
+  handlers: `tap(x, y, button)`, `wheel(x, y, dy)`, `key(event)` (true when a text
   field took it), and `over(x, y)` to ask whether the UI is under a press
   before the game behind it uses it. `button(id, x, y, label)` returns
   true when clicked; `row(id, x, y, w, label, value)` returns -1 / +1 for
@@ -429,6 +458,10 @@ Widgets are known by the id you pass.
   returns the edited text. `mute(true)` makes the widgets that follow
   feel nothing (drawn, but no hover, click or wheel): mute what a modal
   covers, un-mute, then draw the modal, and the click reaches the modal.
+  `region(id, x, y, w, h)` is what the widgets are made of: it answers
+  `{ hot, clicked, wheel, tap }`, `tap` being the tap that clicked it
+  (`{ x, y, button }`) or null. A text field that was being typed in and
+  is no longer drawn lets go of the keyboard at `end()`.
   `theme` holds the colours; `ground` may be `fried-grid`'s `TRANSPARENT`.
 - `wrapText(text, width)` -> lines no wider than `width` cells.
 - `BOX` and `BOX_PLAIN` -- border glyph sets for `box`.

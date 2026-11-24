@@ -10,10 +10,14 @@
 //     brighter on the side toward the candle);
 //   - how much each light reaches each cell: falling off with distance, and
 //     with how squarely it strikes the surface there;
-//   - shadows: from each cell it walks toward the light, and if anything on
-//     the way stands taller than the ray, the cell is in its shadow. A tall
-//     thing near a low light throws a long shadow; raise the light and the
-//     shadow shortens. Hands and sleeves throw shadows too.
+//   - shadows: it sweeps outward from each light along a ray to every cell
+//     on the edge of the light's reach, keeping the horizon (the steepest
+//     thing met so far); a cell that lies below that horizon is in shadow.
+//     Every cell on a ray is visited, so a thing one cell wide throws a whole
+//     shadow. A tall thing near a low light throws a long one; raise the
+//     light and it shortens. Hands and sleeves throw shadows too.
+//   - spill: whatever shines by itself (a flame, a live rune) lights the
+//     cells round it.
 //
 // Units: positions are in cells; heights and light heights are in ROWS (the
 // height of one cell), so a height of 2 is as tall as two rows are deep.
@@ -61,12 +65,44 @@ export function createLighting(cols, rows, { aspect = 2 } = {}) {
     },
 
     // A point light at (x, y) cells, `h` rows above the ground, reaching
-    // `radius` rows. color is [r, g, b]. shadows: false skips the shadow walk.
+    // `radius` rows. color is [r, g, b]. shadows: false casts none; "walk" is
+    // the older way (from each cell a walk toward the light: dearer, and it
+    // can step over a thing narrower than its stride).
     point({ x, y, h = 6, radius = 20, color = [1, 1, 1], power = 1, shadows = true, y0 = 0, y1 = rows }) {
+      if (!(radius > 0)) return L;
       const H = L.height, { nx, ny, nz } = L, top = L.maxHeight;
       const rx = radius * aspect, xa = Math.max(0, Math.floor(x - rx)), xb = Math.min(cols - 1, Math.ceil(x + rx));
-      const ya = Math.max(y0, Math.floor(y - radius)), yb = Math.min(y1 - 1, Math.ceil(y + radius));
+      const ya = Math.max(y0, 0, Math.floor(y - radius)), yb = Math.min(y1 - 1, rows - 1, Math.ceil(y + radius));
+      if (xa > xb || ya > yb) return L;
       const inv = 1 / (radius * radius), cr = color[0] * power, cg = color[1] * power, cb = color[2] * power, dark = L.shade;
+      const walk = String(shadows) === "walk", sweep = !!shadows && !walk && top > 0.05;
+      let vis = null;
+      if (sweep) {
+        // The horizon sweep: along each ray out from the light, the smallest
+        // slope (from the light down to a cell's top) met so far is the
+        // horizon; a cell whose own slope is steeper lies below it.
+        vis = L._vis || (L._vis = new Float32Array(n));
+        for (let cy = ya; cy <= yb; cy++) vis.fill(1, cy * cols + xa, cy * cols + xb + 1);
+        const ray = (tx, ty) => {
+          const ddx = tx + 0.5 - x, ddy = ty + 0.5 - y, steps = Math.ceil(Math.max(Math.abs(ddx), Math.abs(ddy)));
+          if (steps < 1) return;
+          const sx = ddx / steps, sy = ddy / steps, dStep = Math.sqrt((sx / aspect) * (sx / aspect) + sy * sy);
+          let sMin = Infinity, rMin = 0;
+          for (let s = 1; s <= steps; s++) {
+            const px = Math.floor(x + sx * s), py = Math.floor(y + sy * s);
+            if (px < xa || px > xb || py < ya || py > yb) continue;
+            const d = s * dStep;
+            if (d < 0.55) continue;                     // the light's own cell is not in its way
+            const i = py * cols + px, m = (h - H[i]) / d;
+            if (m > sMin) {
+              const over = rMin * (m - sMin);           // how far the horizon's thing stands above the ray to here
+              if (over > 0.08) { const v = over > 0.45 ? 0 : 1 - over / 0.45; if (v < vis[i]) vis[i] = v; }
+            } else { sMin = m; rMin = d; }
+          }
+        };
+        for (let tx = xa; tx <= xb; tx++) { ray(tx, ya); if (yb !== ya) ray(tx, yb); }
+        for (let ty = ya + 1; ty < yb; ty++) { ray(xa, ty); if (xb !== xa) ray(xb, ty); }
+      }
       for (let cy = ya; cy <= yb; cy++) {
         const dy = cy + 0.5 - y;
         for (let cx = xa; cx <= xb; cx++) {
@@ -80,7 +116,8 @@ export function createLighting(cols, rows, { aspect = 2 } = {}) {
           if (facing <= 0) facing = 0;
           let f = (1 - q) * (1 - q) * (0.35 + 0.65 * facing) * 1.25;
           if (f <= 0.002) continue;
-          if (shadows && top > h0 + 0.05 && d2 > 0.3) {
+          if (sweep) f *= dark + (1 - dark) * vis[i];
+          else if (walk && top > h0 + 0.05 && d2 > 0.3) {
             // Walk toward the light as far as anything could still be in the way:
             // the tallest thing in the scene can only block the first part.
             const reach = Math.min(1, (top - h0) / dz), d = Math.sqrt(d2);
@@ -97,6 +134,39 @@ export function createLighting(cols, rows, { aspect = 2 } = {}) {
             f *= dark + (1 - dark) * lit;
           }
           L.r[i] += cr * f; L.g[i] += cg * f; L.b[i] += cb * f;
+        }
+      }
+      return L;
+    },
+
+    // What shines by itself spills into the cells round it. `em` is a colour
+    // per cell (0xRRGGBB, 0 for nothing); each shining cell gives `k` of its
+    // colour away over the cells within `radius` rows, most to the nearest.
+    // Only the cells that shine cost anything.
+    spill(em, k = 1, radius = 2) {
+      if (!(radius > 0)) return L;
+      let K = L._kernel;
+      if (!K || K.radius !== radius) {
+        const ry = Math.ceil(radius), rxc = Math.ceil(radius * aspect), w = [];
+        let sum = 0;
+        for (let dy = -ry; dy <= ry; dy++) for (let dx = -rxc; dx <= rxc; dx++) {
+          const q = ((dx / aspect) * (dx / aspect) + dy * dy) / ((radius + 0.5) * (radius + 0.5));
+          const f = q >= 1 ? 0 : (1 - q) * (1 - q);
+          w.push(f); sum += f;
+        }
+        K = L._kernel = { radius, ry, rxc, w: Float32Array.from(w, (f) => f / sum) };
+      }
+      const { ry, rxc, w } = K, { r, g, b } = L, span = rxc * 2 + 1;
+      for (let i = 0; i < n; i++) {
+        const e = em[i];
+        if (!e) continue;
+        const er = ((e >> 16) & 255) / 255 * k, eg = ((e >> 8) & 255) / 255 * k, eb = (e & 255) / 255 * k;
+        const cx = i % cols, cy = (i / cols) | 0;
+        for (let dy = -ry; dy <= ry; dy++) {
+          const yy = cy + dy;
+          if (yy < 0 || yy >= rows) continue;
+          const x0 = Math.max(0, cx - rxc), x1 = Math.min(cols - 1, cx + rxc), ko = (dy + ry) * span + rxc - cx, o = yy * cols;
+          for (let xx = x0; xx <= x1; xx++) { const f = w[ko + xx]; r[o + xx] += er * f; g[o + xx] += eg * f; b[o + xx] += eb * f; }
         }
       }
       return L;

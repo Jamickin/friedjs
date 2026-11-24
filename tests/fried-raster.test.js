@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { edgeGlyph, strokeLine, strokePath, strokeEllipse, fillEllipse, fillPoly, fillRect, fillCapsule } from "../addons/fried-raster.js";
+import { edgeGlyph, strokeLine, strokePath, strokeEllipse, strokePoly, fillEllipse, fillPoly, fillRect, fillCapsule } from "../addons/fried-raster.js";
 
 // Collect what a shape draws into a little text picture.
 function canvas(w, h) {
@@ -79,4 +79,29 @@ test("fried-raster: a capsule reports how far along and how far across", () => {
   assert.ok(n > 40);
   assert.equal(maxT, 1);
   assert.ok(maxD <= 1 && maxD > 0.6);
+});
+
+test("fried-raster: strokePoly outlines a lumpy shape on the rim of its own fill", () => {
+  const pts = [];
+  for (let i = 0; i < 16; i++) { const a = i / 16 * Math.PI * 2, w = 1 + 0.12 * Math.cos(a * 3 + 1); pts.push([20 + Math.cos(a) * 9 * w, 8 + Math.sin(a) * 4 * w]); }
+  const fill = new Set(), edge = new Map();
+  fillPoly((x, y) => fill.add(x + "," + y), pts);
+  strokePoly((x, y, g) => edge.set(x + "," + y, g), pts, { aspect: 2 });
+  assert.ok(edge.size > 20);
+  for (const k of edge.keys()) assert.ok(fill.has(k), "an outline cell is a cell the fill covers: " + k);
+  const small = new Map();
+  strokePoly((x, y, g) => small.set(x + "," + y, g), [[4, 1], [8, 1], [10, 2], [10, 4], [8, 5], [4, 5], [2, 4], [2, 2]], { aspect: 2 });
+  assert.ok([...small.values()].some((g) => g === "." || g === "'" || g === "`"), "a small shape gets soft corners");
+  strokePoly(() => assert.fail("two points are not a shape"), [[0, 0], [4, 4]]);
+});
+
+test("fried-raster: shapes that are not finite, or have no size, draw nothing instead of hanging", () => {
+  const none = () => assert.fail("drew something");
+  strokeLine(none, 0, 0, Infinity, 3);
+  fillEllipse(none, 5, 5, NaN, 2); fillEllipse(none, 5, 5, 0, 2);
+  fillPoly(none, [[0, 0], [Infinity, 0], [3, 3]]);
+  fillCapsule(none, 0, 0, 4, 4, 0); fillCapsule(none, 0, 0, NaN, 4, 1);
+  const got = [];
+  fillCapsule((x, y, t, d) => got.push(d), 2, 2, 2, 2, 1.5, 2);               // a capsule of no length is a dot
+  assert.ok(got.length > 0 && got.every((d) => d >= 0 && d <= 1));
 });

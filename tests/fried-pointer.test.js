@@ -94,3 +94,64 @@ test("fried-pointer: cancel ends every press without a tap; the context menu is 
   p2.props.onwheel({ clientX: 7, clientY: 8, deltaY: -120 });
   assert.deepEqual(wheel, [7, -120]);
 });
+
+// A mouse sends pointerdown for its first button and pointerup for its last;
+// the ones in between come as pointermove events naming the button.
+const chord = (x, y, button, buttons) => ({ ...ev(x, y, button), buttons });
+
+test("fried-pointer: a second button pressed and let go during a press is its own press", () => {
+  const { ptr, log } = rig();
+  ptr.props.onpointerdown(chord(5, 5, 0, 1));
+  ptr.props.onpointermove(chord(5, 5, 2, 3));        // right goes down while left is held
+  assert.equal(ptr.presses.size, 2);
+  ptr.props.onpointermove(chord(5, 5, 0, 2));        // left comes up, right still down
+  assert.equal(ptr.presses.size, 1);
+  ptr.props.onpointerup(chord(5, 5, 2, 0));
+  assert.equal(ptr.presses.size, 0);
+  assert.deepEqual(log, ["down:0@5,5", "down:2@5,5", "tap:0@5,5", "up:0@5,5", "tap:2@5,5", "up:2@5,5"]);
+});
+
+test("fried-pointer: when the last button comes up, a press that missed its release is ended", () => {
+  const { ptr, log } = rig();
+  ptr.props.onpointerdown(chord(5, 5, 0, 1));
+  ptr.props.onpointermove(chord(30, 5, -1, 1));      // a drag with the left button
+  ptr.props.onpointerdown(chord(30, 5, 2, 3));       // (some other way a second press gets in)
+  ptr.props.onpointerup(chord(30, 5, 2, 0));         // and both are gone at once
+  assert.equal(ptr.presses.size, 0);
+  assert.ok(log.includes("dragend:0@30,5") && log.includes("up:0@30,5"), "the drag was ended: " + log.join(" "));
+});
+
+test("fried-pointer: a new press on a button ends the one it replaces", () => {
+  const { ptr, log } = rig();
+  ptr.props.onpointerdown(ev(5, 5));
+  ptr.props.onpointermove(ev(40, 5));
+  ptr.props.onpointerdown(ev(50, 5));
+  assert.deepEqual(log.slice(-3), ["dragend:0@40,5", "up:0@40,5", "down:0@50,5"]);
+});
+
+test("fried-pointer: dragPx by button: a button that never drags keeps its hold and its tap through any wobble", () => {
+  const { ptr, log, t } = rig({ dragPx: (button) => (button === 2 ? Infinity : 4) });
+  ptr.props.onpointerdown(ev(10, 10, 2));
+  ptr.props.onpointermove(ev(19, 14, 2));            // well past four pixels
+  t.fire();
+  ptr.props.onpointerup(ev(19, 14, 2));
+  assert.deepEqual(log, ["down:2@10,10", "hold:2@19,14", "up:2@19,14"]);
+  log.length = 0;
+  ptr.props.onpointerdown(ev(10, 10, 2));
+  ptr.props.onpointermove(ev(22, 10, 2));
+  ptr.props.onpointerup(ev(22, 10, 2));
+  assert.deepEqual(log, ["down:2@10,10", "tap:2@22,10", "up:2@22,10"]);
+  log.length = 0;
+  ptr.props.onpointerdown(ev(10, 10, 0));            // the other button still drags
+  ptr.props.onpointermove(ev(22, 10, 0));
+  ptr.props.onpointerup(ev(22, 10, 0));
+  assert.deepEqual(log, ["down:0@10,10", "dragstart:0@10,10", "drag:0@22,10", "dragend:0@22,10", "up:0@22,10"]);
+});
+
+test("fried-pointer: losing the pointer capture ends every press without a tap", () => {
+  const { ptr, log } = rig();
+  ptr.props.onpointerdown(ev(5, 5));
+  ptr.props.onlostpointercapture();
+  assert.deepEqual(log, ["down:0@5,5", "up:0@5,5"]);
+  assert.equal(ptr.presses.size, 0);
+});
