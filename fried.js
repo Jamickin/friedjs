@@ -22,7 +22,7 @@
 
 // Kept equal to package.json "version" and the top CHANGELOG.md entry
 // (asserted by tests/version.test.js).
-export const VERSION = "0.5.0";
+export const VERSION = "0.6.0";
 
 const perf = typeof performance !== "undefined" ? performance : null;
 const t = () => perf?.now() ?? 0;
@@ -71,18 +71,52 @@ function ensureSheet() {
   _sheet = el.sheet;
 }
 
+// Two kinds of key beyond a plain class name (added in 0.6.0, from friction
+// building a game HUD: a hover state and a blinking caret had no home):
+//   "btn:hover", "row::after", "item:not(:last-child)"
+//       a state or pseudo-element of the class named before the first colon,
+//       which must be a plain key of the same call. That class is then NOT
+//       deduped by content: it gets a name of its own, so the pseudo rule
+//       can't leak onto another name that happens to share its declarations.
+//   "@keyframes blink", "@media (max-width: 700px)"
+//       an at-rule, inserted once, verbatim; its value is the rule's body.
+// Neither kind adds a key to the returned map.
 export function css(rules) {
   ensureSheet();
   const out = {};
+  const insert = (text) => _sheet.insertRule(text, _sheet.cssRules.length);
+  let withStates = null;
+  for (const name in rules) {
+    const colon = name.indexOf(":");
+    if (colon > 0 && name.charAt(0) !== "@") (withStates || (withStates = new Set())).add(name.slice(0, colon));
+  }
   for (const name in rules) {
     const decl = rules[name];
-    let cls = _cssCache.get(decl);
+    if (name.charAt(0) === "@") {
+      const key = name + "{" + decl;
+      if (!_cssCache.has(key)) { _cssCache.set(key, ""); insert(`${name}{${decl}}`); }
+      continue;
+    }
+    if (name.indexOf(":") > 0) continue;
+    const own = withStates !== null && withStates.has(name);
+    const key = own ? name + "{" + decl : decl;
+    let cls = _cssCache.get(key);
     if (!cls) {
       cls = "f" + _cssCache.size.toString(36);
-      _cssCache.set(decl, cls);
-      _sheet.insertRule(`.${cls}{${decl}}`, _sheet.cssRules.length);
+      _cssCache.set(key, cls);
+      insert(`.${cls}{${decl}}`);
     }
     out[name] = cls;
+  }
+  if (withStates !== null) {
+    for (const name in rules) {
+      const colon = name.indexOf(":");
+      if (colon <= 0 || name.charAt(0) === "@") continue;
+      const base = out[name.slice(0, colon)];
+      if (!base) continue;
+      const key = base + name.slice(colon) + "{" + rules[name];
+      if (!_cssCache.has(key)) { _cssCache.set(key, ""); insert(`.${base}${name.slice(colon)}{${rules[name]}}`); }
+    }
   }
   return out;
 }

@@ -332,3 +332,23 @@ as `name(exported)`. `fried.js` changed only its `VERSION`. Why:
   within 25%, with `FRIED_FRICTION_LOG` unset.
 - `npm run build` passes (type check clean, bundle 37.50 KB / 13.10 KB
   gzip).
+
+## 0.6.0 (the game batch): fried-grid, fried-loop, fried-pointer, css() states -- what changed, how verified
+
+FriedJS carried a real-time game for the first time (the ASCII version of
+"We Have Magic at Home", `fried-ascii/` in the spellcraft repo). Three
+addons and one small core change came out of it; `evolution/EVOLUTION.md`
+entries 13-16 have the friction lines.
+
+- New: `addons/fried-grid.js`, `addons/fried-loop.js`,
+  `addons/fried-pointer.js`, each with a test file. Core: `css()` accepts
+  `"name:state"` and `"@rule"` keys; nothing else in `fried.js` changed
+  but `VERSION`.
+- `npm test` 167 pass, 0 fail (142 at 0.5.0, +25: grid 8, loop 6, pointer 7, css 5, less 1 merged), docs-truth and version (0.6.0) green. `npm run build` passes (type check clean with the three addons included; bundle 37.95 KB / 13.27 KB gzip). `node stress.js` x3: 43/43 each; create 10,000 rows median 2.92 ms (baseline 4.3); append 1,000 median 2.92 ms (runs 2.83, 3.19, 2.92; baseline 2.2, +33%). That append figure is NOT from this change: the untouched `main` checkout measured 2.87, 2.92, 3.48 on the same machine in the same minute. Node is v26.13.0 here and the baseline was recorded on v24.11.0, so `evolution/baseline.md` needs re-recording (left alone; flagged to James). `node benchmark.js` x3, medians vs baseline: 1,000 cards 2.03 ms (2.27); 5,000 7.29 (8.24); 20,000 20.11 (24.7); 50,000 54.57 (61.6); 100,000 state updates 10.5 (25.2); 600 patcher cycles 306 to 309 (309.5). All within 25%.
+- In a browser (the game itself, driven by real pointer events): chalk
+  drawn, rings and workings read, the journal reader opened, three render
+  modes switched. Frame cost measured by running 600 frames back to back
+  through `loop.tick()`: 2.5 to 3.5 ms a frame (simulate, paint, light,
+  draw) at 5,712 cells, 600 to 1,300 of them redrawn per frame. The
+  embedded preview pane throttles animation frames, so a live 60 fps
+  reading was not taken there.

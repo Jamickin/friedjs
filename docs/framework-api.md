@@ -73,7 +73,14 @@ import { mount, state, action, ui, uid, css, cssVar, onRender } from "./fried.js
 - `css(rules)` -> a tiny CSS-in-JS engine. `rules` is `{ name: "decl;" }`;
   returns `{ name: "generatedClassName" }`. Injects one `<style>` tag,
   dedupes identical declaration strings by content, so calling `css(...)`
-  with the same rules twice never grows the stylesheet.
+  with the same rules twice never grows the stylesheet. Two more kinds of
+  key (0.6.0), neither of which adds a name to the returned map:
+  `"btn:hover"`, `"row::after"`, `"item:not(:last-child)"` are a state or
+  pseudo-element of the class named before the first colon (which must be
+  a plain key of the same call, and then gets a class of its own instead
+  of a shared, deduped one, so the state cannot leak onto another name
+  with the same declarations); `"@keyframes blink"` or `"@media (...)"` is
+  an at-rule, inserted once, verbatim, its value being the rule's body.
 - `cssVar(name, value?)` -> gets (no `value`) or sets a CSS custom property
   on `documentElement` directly. Setting one costs **zero re-renders** --
   it's a plain style write, not framework state.
@@ -242,6 +249,101 @@ matchRoute(routes, "/plans/p%201?tab=diff");
 parseRoute("/done?agent=codex&day=today");
 // -> { path: "/done", query: { agent: "codex", day: "today" } }
 ```
+
+## fried-grid.js — optional character grid for real-time drawing
+
+```js
+import { createGrid, createLight, shade, createDots, createGridRenderer } from "./fried-grid.js";
+```
+
+The virtual DOM is the wrong tool for a full-screen grid of cells that all
+change sixty times a second: thousands of vnodes built and diffed per frame
+just to recolour text. This addon is the other half. You paint glyphs and
+colours into typed arrays, and a canvas renderer redraws only the cells
+whose (glyph, ink, paper) changed since the last frame: a keyed diff with
+one key per cell. The canvas itself is an ordinary `ui("canvas", { ref })`
+node; the VDOM owns the element, this owns its pixels. Everything except
+the renderer is plain data and runs in Node. Colours are `0xRRGGBB`
+integers.
+
+- `createGrid(cols, rows)` -> a cell buffer: typed arrays `ch` (code
+  points), `fg`, `bg`, and the methods `set(x, y, ch, fg, bg?)` (leaving
+  `bg` out keeps the cell's paper), `put(x, y, text, fg, bg?)` (a string
+  along a row; its spaces are skipped), `fill`, `clear`, `copyFrom`,
+  `inside`, `index`. Writes off the grid are ignored.
+- `countDirty(a, b)` -> how many cells differ between two grids.
+- `createLight(cols, rows, aspect = 2)` -> one RGB float triple per cell
+  (`r`, `g`, `b`), with `clear`, `add`, `point(x, y, radius, [r, g, b],
+  power)` (a smooth falloff to nothing at `radius` rows, round on screen
+  because `aspect` is cell height over width), `quad(points, color,
+  power)` (a convex patch) and `blur(passes)`.
+- `shade(src, light, out, { bits, emissive, paper })` -> lights a painted
+  grid into `out`: ink and paper times the light of their cell, an
+  optional per-cell `emissive` colour added to the ink, then quantized to
+  `bits` per channel so a flicker smaller than one step leaves the cell's
+  key unchanged.
+- `createDots(cols, rows)` -> a sub-cell layer, 2 x 4 dots per cell, each
+  dot a weight 0..1: `set`, `get`, `line`, `clear`, and `blit(grid,
+  colorOf)`, which writes one Braille glyph per cell inked by the mean
+  weight of its dots.
+- `createGridRenderer({ canvas, overlay?, font?, weight? })` -> draws
+  grids on a canvas. `resize(cols, rows, cssWidth, cssHeight, dpr)` fits
+  whole device pixels per cell; `draw(grid)` redraws changed cells and
+  returns how many; `sprites(list)` draws loose glyphs at fractional cell
+  positions on the `overlay` canvas (`{ x, y, ch, color, alpha?, scale?,
+  add?, glow? }`), so smooth motion never dirties the cell layer;
+  `cellAt(clientX, clientY)`, `invalidate()`, `stats`. Each glyph in each
+  colour is drawn once into an atlas and blitted from then on; Braille and
+  block characters are drawn as rectangles, so they tile whatever the font.
+- `rgb(r, g, b)`, `hex("#rrggbb")`, `cssColor(c)` -> colour conversion.
+- `litColor(c, r, g, b)`, `scaleColor(c, k)`, `addColor(a, b)`,
+  `mixColor(a, b, t)`, `luma(c)`, `quantize(c, bits)` -> colour arithmetic,
+  clamped.
+- `ramp(chars, t)` -> a glyph from a density ramp (`" .:-=+*#%@"`) by `t`
+  in 0..1.
+
+## fried-loop.js — optional frame loop with a fixed simulation step
+
+```js
+import { createLoop } from "./fried-loop.js";
+```
+
+- `createLoop({ update, render, step = 1/60, maxSteps = 5 })` -> `{ start,
+  stop, tick, time, frame, stats, running }`. `update(dt, time)` is the
+  simulation: it is always called with the same `dt`, zero or more times
+  per animation frame, so it behaves the same at 30, 60 or 144 Hz.
+  `render(alpha, frameDt)` runs once per animation frame. The loop pauses
+  while the page is hidden and, after a stall, drops time rather than
+  running more than `maxSteps` steps. `tick(ms)` runs one frame by hand
+  (tests, stepping while paused). `stats` has smoothed `fps`, `updateMs`,
+  `renderMs`.
+
+Everything `update` and `render` do happens inside one animation-frame
+callback, and FriedJS flushes its render in the microtask right after it,
+so any number of `state()` writes in a frame make at most one virtual-DOM
+render, before the browser paints. Drive the loop with plain functions,
+not `action()` (an action schedules a render on every call), and set a
+`state()` cell only when its value differs.
+
+## fried-pointer.js — optional pointer and drag helpers
+
+```js
+import { createPointer } from "./fried-pointer.js";
+```
+
+- `createPointer(options)` -> `{ props, at, inside, presses, cancel }`.
+  Spread `props` onto the element: `ui("canvas", { key: "view",
+  ...ptr.props })`. Per mouse button, a press becomes a tap (`onTap`), a
+  hold (`onHold`, after `holdMs`, 450 by default, without moving) or a
+  drag (`onDragStart`, `onDrag`, `onDragEnd`, past `dragPx`); `onDown`,
+  `onMove`, `onUp`, `onWheel` and `onLeave` are also called. `toLocal(
+  clientX, clientY, element)` converts positions once for every callback
+  (to grid cells, say). Each callback gets the position and the press
+  (`{ button, start, at, moved, held, dragging, data }`; `data` is yours).
+  The pointer is captured for the length of a press. A press that starts
+  on a `button`, `a`, `input`, `textarea`, `select` or `[data-pointer-free]`
+  inside the element is left to that control. The callbacks are plain
+  functions, so a pointermove never schedules a render.
 
 ## Server addons (addons/server/) -- Node only
 

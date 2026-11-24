@@ -7,6 +7,29 @@ equal `package.json`'s `version` and `fried.js`'s `VERSION` export
 (`tests/version.test.js` checks it). Why each change was made is in
 `evolution/EVOLUTION.md`.
 
+## [0.6.0] - 2026-11-24
+
+FriedJS carries a real-time game for the first time ("We Have Magic at
+Home", an ASCII magic sandbox: a 136 x 42 character grid lit per cell,
+redrawn every frame, with a FriedJS HUD round it). Everything here came
+from friction building it (`evolution/friction.jsonl`, consumer
+`whmah-ascii`); see `evolution/EVOLUTION.md` entries 13-16. All additive.
+
+### Added
+- `addons/fried-grid.js`: a typed-array cell buffer (`createGrid`), a
+  per-cell RGB light field (`createLight`, `shade`), a 2 x 4 sub-cell dot
+  layer written out as Braille (`createDots`), colour helpers, and
+  `createGridRenderer`, a canvas renderer with a per-cell keyed diff, a
+  tinted-glyph atlas and a sprite overlay for sub-cell motion.
+- `addons/fried-loop.js`: `createLoop`, a fixed-step simulation tick with
+  one render per animation frame, paused while the page is hidden.
+- `addons/fried-pointer.js`: `createPointer`, tap / hold / drag per mouse
+  button with pointer capture, leaving presses on controls inside the
+  element to those controls.
+- `fried.js` `css()`: keys of the form `"name:hover"` / `"name::after"`
+  (a state or pseudo-element of a class in the same call) and
+  `"@keyframes x"` / `"@media (...)"` (an at-rule, inserted once).
+
 ## [0.5.0] - 2026-10-22
 
 Friction batch: four additive changes to the server addons and the map,

@@ -17,6 +17,9 @@ The core framework (`fried.js`) is fiercely protected from bloat. Advanced featu
 * `fried-db.js`: A synchronous, memory-first reactive database backed by IndexedDB.
 * `fried-virtual.js`: A windowed Virtual Scroller for rendering 100,000+ items without freezing the DOM.
 * `fried-router.js`: A lightweight Hash Router for building SPAs on zero-config static servers, with `:param` routes (`/plans/:id`) and query strings.
+* `fried-grid.js`: A character grid for real-time drawing: typed-array cells, per-cell light, Braille sub-cell dots, and a canvas renderer that redraws only the cells that changed.
+* `fried-loop.js`: A frame loop with a fixed-step simulation tick that sits inside FriedJS's microtask batching (one virtual-DOM render per frame, at most).
+* `fried-pointer.js`: Tap, hold and drag per mouse button, with pointer capture, for a canvas or any element.
 
 For the Node side of a small local app, `addons/server/` has four more, with no npm dependencies:
 * `fried-score.js`: state in one atomically written JSON file, plus an event log, a ring buffer and subscribers.

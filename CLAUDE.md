@@ -77,6 +77,13 @@ what came from where and why, and it's short.
   browser only. Routes may use `:param` segments and a query string
   (`"/plans/:id"`, `#/done?agent=codex`); the view gets
   `{ params, query, path }`.
+- `addons/fried-grid.js`, `addons/fried-loop.js`, `addons/fried-pointer.js`
+  -- optional, for something that moves every frame (a game, a
+  visualisation): a character-cell buffer with per-cell light and a canvas
+  renderer that redraws only changed cells; a fixed-step frame loop; tap,
+  hold and drag per mouse button. The VDOM stays for the UI round it. Use
+  plain functions, not `action()`, inside the loop and the pointer
+  callbacks.
 - `patcher.js` (repo root) -- a one-line re-export of
   `tooling/patcher.js`, kept so older imports keep working. Import from
   `tooling/patcher.js` in new code.
