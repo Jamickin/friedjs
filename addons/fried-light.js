@@ -88,7 +88,6 @@ export function createLighting(cols, rows, { aspect = 2 } = {}) {
     else { let a = (y0 - ay) / dy, b = (y1 - ay) / dy; if (a > b) { const t = a; a = b; b = t; } if (a > t0) t0 = a; if (b < t1) t1 = b; if (t0 > t1) return -1; }
     return t0;
   }
-  const crosses = (ax, ay, bx, by, x0, y0, x1, y1) => enters(ax, ay, bx, by, x0, y0, x1, y1) >= 0;
   // How much of a light gets to each cell of a box (its colour and power left
   // out): written to `out`, 0 where none does. `vis` is the sweep's answer,
   // or null for a light that casts no shadow. With `mark`, a cell whose share
@@ -201,11 +200,12 @@ export function createLighting(cols, rows, { aspect = 2 } = {}) {
     // each of `fields` ([field, k] pairs) and point() for each of `lights`,
     // but remembered. Called again, it looks at what is different:
     //
-    //   - the heights: the box of cells whose height changed. Normals are
-    //     worked out again inside it. A shadow at a cell depends only on the
-    //     heights between the light and that cell, so for each light only the
-    //     rays that pass through the box are swept again, and only from where
-    //     they enter it;
+    //   - the heights: in each row, the span of cells whose height changed.
+    //     Normals are worked out again round them. A shadow at a cell depends
+    //     only on the heights between the light and that cell, so for each
+    //     light only the rays that point at what changed are swept again (the
+    //     wedge of directions those spans lie in, as the light sees them),
+    //     and only from where each first meets a changed cell;
     //   - a light that moved, or changed height, reach or `shadows`: that
     //     light alone is worked out again;
     //   - a light whose colour or power changed: nothing is worked out, its
@@ -230,6 +230,7 @@ export function createLighting(cols, rows, { aspect = 2 } = {}) {
           H: new Float32Array(n), slots: new Map(), order: [], pool: [], amb: [NaN, NaN, NaN], fields: [], swept: false, shade: NaN,
           lo: new Int32Array(rows), hi: new Int32Array(rows), rim: new Int32Array((cols + rows) * 4 + 8),
           mark: new Uint8Array(n), mlo: new Int32Array(rows).fill(cols), mhi: new Int32Array(rows).fill(-1),
+          dlo: new Int32Array(rows), dhi: new Int32Array(rows),
           done: { changed: false, x0: 0, y0: 0, x1: -1, y1: -1, full: 0, partial: 0, rays: 0 },
         };
         L.kept = { r: new Float32Array(n), g: new Float32Array(n), b: new Float32Array(n) };
@@ -237,14 +238,19 @@ export function createLighting(cols, rows, { aspect = 2 } = {}) {
       const H = L.height, P = K.H, done = K.done, kept = L.kept;
       done.full = 0; done.partial = 0; done.rays = 0; done.changed = false; done.x0 = 0; done.y0 = 0; done.x1 = -1; done.y1 = -1;
 
-      // What changed in the heights: one box round every cell that differs.
+      // What changed in the heights: for each row, from its first cell that
+      // differs to its last (dlo, dhi), and one box round them all.
       let dx0 = cols, dy0 = rows, dx1 = -1, dy1 = -1, top = 0;
+      const dlo = K.dlo, dhi = K.dhi;
       for (let y = 0, i = 0; y < rows; y++) {
+        let a = cols, z = -1;
         for (let x = 0; x < cols; x++, i++) {
           const v = H[i];
           if (v > top) top = v;
-          if (v !== P[i]) { P[i] = v; if (x < dx0) dx0 = x; if (x > dx1) dx1 = x; if (y < dy0) dy0 = y; if (y > dy1) dy1 = y; }
+          if (v !== P[i]) { P[i] = v; if (x < a) a = x; z = x; }
         }
+        dlo[y] = a; dhi[y] = z;
+        if (z >= 0) { if (a < dx0) dx0 = a; if (z > dx1) dx1 = z; if (y < dy0) dy0 = y; dy1 = y; }
       }
       L.maxHeight = top;
       const swept = top > 0.05, dirty = dx1 >= 0;
@@ -300,21 +306,50 @@ export function createLighting(cols, rows, { aspect = 2 } = {}) {
           // The heights changed and this light did not: how much of it can that have altered?
           const ex0 = Math.max(xa, dx0 - 1), ex1 = Math.min(xb, dx1 + 1), ey0 = Math.max(ya, dy0 - 1), ey1 = Math.min(yb, dy1 + 1);
           if (ex0 > ex1 || ey0 > ey1) continue;               // out of its reach: nothing
-          if (!shadowed) { factors(s.f, null, x, y, h, radius, ex0, ex1, ey0, ey1, K.mark, K.mlo, K.mhi); done.partial++; continue; }
-          if (x >= dx0 - 3 && x <= dx1 + 4 && y >= dy0 - 3 && y <= dy1 + 4) whole = true;      // the light stands in what changed: every ray passes through it
-          else {
-            // The rays that pass through the box (and those a cell to either
-            // side, which share cells with them further out).
-            const rim = K.rim, bx0 = dx0 - 2, by0 = dy0 - 2, bx1 = dx1 + 3, by1 = dy1 + 3;
+          // (A slope at a cell is made of its four neighbours: where the share
+          // may be different is each changed row's span and a cell more, and
+          // the same span in the row above and the row below.)
+          let nearA = 0, nearZ = -1;
+          const near = (cy) => {
+            let a = cols, z = -1;
+            for (let yy = cy - 1; yy <= cy + 1; yy++) if (yy >= 0 && yy < rows && dhi[yy] >= 0) { if (dlo[yy] < a) a = dlo[yy]; if (dhi[yy] > z) z = dhi[yy]; }
+            nearA = Math.max(xa, a - 1); nearZ = z < 0 ? -1 : Math.min(xb, z + 1);
+          };
+          if (!shadowed) {
+            for (let cy = ey0; cy <= ey1; cy++) { near(cy); if (nearZ >= nearA) factors(s.f, null, x, y, h, radius, nearA, nearZ, cy, cy, K.mark, K.mlo, K.mhi); }
+            done.partial++; continue;
+          }
+          // The directions what changed lies in, as this lamp sees it: for
+          // each changed row the box round its changed cells, two cells
+          // wider all round (rays a cell to either side share cells with the
+          // rays through it, further out). A long thing seen end on is a
+          // narrow wedge, however wide the one box round all of it would be.
+          const ref = Math.atan2((dy0 + dy1 + 1) / 2 - y, (dx0 + dx1 + 1) / 2 - x);
+          let amin = Infinity, amax = -Infinity;
+          for (let cy = Math.max(dy0, ya - 2); cy <= Math.min(dy1, yb + 2); cy++) {
+            if (dhi[cy] < 0) continue;
+            const rx0 = dlo[cy] - 2, rx1 = dhi[cy] + 3, ry0 = cy - 2, ry1 = cy + 3;
+            if (x >= rx0 - 1 && x <= rx1 + 1 && y >= ry0 - 1 && y <= ry1 + 1) { whole = true; break; }      // the lamp stands in what changed: every ray passes through it
+            for (let c = 0; c < 4; c++) {
+              let a = Math.atan2((c & 2 ? ry1 : ry0) - y, (c & 1 ? rx1 : rx0) - x) - ref;
+              if (a > Math.PI) a -= Math.PI * 2; else if (a <= -Math.PI) a += Math.PI * 2;
+              if (a < amin) amin = a;
+              if (a > amax) amax = a;
+            }
+          }
+          if (!whole && amax - amin > Math.PI * 0.9) whole = true;      // it lies half round the lamp (or across the line where angles wrap): sweep it all
+          if (!whole) {
+            if (amax < amin) continue;                         // (no changed row in its reach)
+            // The rays in those directions. (Where each ray of the rim points is kept with the lamp.)
+            const rim = K.rim, rimA = s.rimA, a0 = amin - 1e-4, a1 = amax + 1e-4;
             let m = 0, total = 0;
-            for (let tx = xa; tx <= xb; tx++) {
-              total++; if (crosses(x, y, tx + 0.5, ya + 0.5, bx0, by0, bx1, by1)) { rim[m++] = tx; rim[m++] = ya; }
-              if (yb !== ya) { total++; if (crosses(x, y, tx + 0.5, yb + 0.5, bx0, by0, bx1, by1)) { rim[m++] = tx; rim[m++] = yb; } }
-            }
-            for (let ty = ya + 1; ty < yb; ty++) {
-              total++; if (crosses(x, y, xa + 0.5, ty + 0.5, bx0, by0, bx1, by1)) { rim[m++] = xa; rim[m++] = ty; }
-              if (xb !== xa) { total++; if (crosses(x, y, xb + 0.5, ty + 0.5, bx0, by0, bx1, by1)) { rim[m++] = xb; rim[m++] = ty; } }
-            }
+            const take = (tx, ty) => {
+              let a = rimA[total++] - ref;
+              if (a > Math.PI) a -= Math.PI * 2; else if (a <= -Math.PI) a += Math.PI * 2;
+              if (a >= a0 && a <= a1) { rim[m++] = tx; rim[m++] = ty; }
+            };
+            for (let tx = xa; tx <= xb; tx++) { take(tx, ya); if (yb !== ya) take(tx, yb); }
+            for (let ty = ya + 1; ty < yb; ty++) { take(xa, ty); if (xb !== xa) take(xb, ty); }
             if (m > total * 1.2) whole = true;                 // most of them (m counts two numbers a ray): the whole sweep is cheaper than two passes
             else {
               const lo = K.lo, hi = K.hi, vis = s.vis;
@@ -332,7 +367,7 @@ export function createLighting(cols, rows, { aspect = 2 } = {}) {
                 for (let st = Math.max(1, Math.floor(t0 * steps) - 1); st <= steps; st++) {
                   const px = Math.floor(x + sx * st), py = Math.floor(y + sy * st);
                   if (px < xa || px > xb || py < ya || py > yb) continue;
-                  if (!inside) { if (px >= dx0 && px <= dx1 && py >= dy0 && py <= dy1) inside = true; else continue; }
+                  if (!inside) { if (px >= dlo[py] && px <= dhi[py]) inside = true; else continue; }
                   vis[py * cols + px] = 1;
                   if (px < lo[py]) lo[py] = px;
                   if (px > hi[py]) hi[py] = px;
@@ -343,7 +378,7 @@ export function createLighting(cols, rows, { aspect = 2 } = {}) {
               for (let k = 0; k < m; k += 2) ray(vis, x, y, h, rim[k], rim[k + 1], xa, xb, ya, yb);
               done.rays += m >> 1;
               // And the light itself, where a shadow or a slope may be different.
-              for (let cy = ey0; cy <= ey1; cy++) { if (ex0 < lo[cy]) lo[cy] = ex0; if (ex1 > hi[cy]) hi[cy] = ex1; }
+              for (let cy = ey0; cy <= ey1; cy++) { near(cy); if (nearZ >= nearA) { if (nearA < lo[cy]) lo[cy] = nearA; if (nearZ > hi[cy]) hi[cy] = nearZ; } }
               for (let cy = ya; cy <= yb; cy++) if (hi[cy] >= lo[cy]) factors(s.f, vis, x, y, h, radius, lo[cy], hi[cy], cy, cy, K.mark, K.mlo, K.mhi);
               done.partial++;
               continue;
@@ -351,7 +386,15 @@ export function createLighting(cols, rows, { aspect = 2 } = {}) {
           }
         }
         if (whole) {
-          if (shadowed) { sweep(s.vis, x, y, h, xa, xb, ya, yb); done.rays += (xb - xa + yb - ya) * 2; }
+          if (shadowed) {
+            sweep(s.vis, x, y, h, xa, xb, ya, yb); done.rays += (xb - xa + yb - ya) * 2;
+            // Which way each ray of its rim points, in the order they are swept.
+            const count = (xb - xa + 1) * (yb !== ya ? 2 : 1) + Math.max(0, yb - ya - 1) * (xb !== xa ? 2 : 1);
+            if (!s.rimA || s.rimA.length < count) s.rimA = new Float32Array(count);
+            let k = 0;
+            for (let tx = xa; tx <= xb; tx++) { s.rimA[k++] = Math.atan2(ya + 0.5 - y, tx + 0.5 - x); if (yb !== ya) s.rimA[k++] = Math.atan2(yb + 0.5 - y, tx + 0.5 - x); }
+            for (let ty = ya + 1; ty < yb; ty++) { s.rimA[k++] = Math.atan2(ty + 0.5 - y, xa + 0.5 - x); if (xb !== xa) s.rimA[k++] = Math.atan2(ty + 0.5 - y, xb + 0.5 - x); }
+          }
           factors(s.f, shadowed ? s.vis : null, x, y, h, radius, xa, xb, ya, yb);
           grow(xa, ya, xb, yb);
           done.full++;

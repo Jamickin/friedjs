@@ -138,3 +138,24 @@ test("fried-light relight: the ground going flat, and rising again, switches the
   L.height.fill(0); L.relight(what);
   assert.ok(Math.abs(L.kept.r[10 * 40 + 30] - open) < 1e-7, "and with the thing gone the ground is as it was");
 });
+
+test("fried-light relight: a long thin thing seen end on costs a narrow wedge, not the box round it", () => {
+  const cols = 220, rows = 90, L = createLighting(cols, rows, { aspect: 2 });
+  const lamp = { x: 10.5, y: 10.5, h: 6, radius: 400 }, what = { ambient: 0.05, lights: [lamp] };
+  // An arm: a strip three cells wide running away from the lamp, almost along its line of sight.
+  const arm = (shift) => { L.height.fill(0); for (let k = 0; k <= 400; k++) { const t = k / 400, x = 60 + 130 * t + shift * 0.3, y = 25 + 47 * t + shift; for (let d = -1; d <= 1; d++) { const yy = Math.round(y) + d, xx = Math.round(x); if (yy >= 0 && yy < rows) L.height[yy * cols + xx] = 3; } } };
+  arm(0); L.relight(what);
+  const rim = (cols + rows) * 2;
+  let rays = 0, steps = 0;
+  for (let shift = 1; shift <= 12; shift++) {
+    arm(shift);
+    const done = L.relight(what);
+    rays += done.rays; steps++;
+    assert.equal(done.partial, 1, "shift " + shift + ": worked out in part");
+    assert.equal(apart(L, fresh(L, what)), 0, "shift " + shift + ": and exactly the light it would be from nothing");
+  }
+  // The box round the arm (130 by 50 cells, forty cells from the lamp) fills
+  // most of the lamp's view of the far wall; the arm itself, a sliver of it.
+  if (process.env.SHOW) console.log("rays a step", (rays / steps).toFixed(0), "of", rim);
+  assert.ok(rays / steps < rim * 0.3, "rays a step: " + (rays / steps).toFixed(0) + " of " + rim + " on the rim");
+});

@@ -443,11 +443,13 @@ cell background colour at all.
   `relight({ ambient, fields, lights, refresh? })` gives the same light as
   `normals()`, `ambient()`, `addField()` for each `[field, k]` of `fields`
   and `point()` for each of `lights`, into `kept` (`{ r, g, b }`), and
-  remembers each lamp's share. Called again, it finds the box of cells
-  whose height changed, works the normals out again inside it, and for
-  each lamp sweeps again only the rays that pass through that box, from
-  where they enter it (a shadow at a cell depends only on the heights
-  between the lamp and the cell). A lamp that moved, or changed `h`,
+  remembers each lamp's share. Called again, it finds in each row the span
+  of cells whose height changed, works the normals out again round them,
+  and for each lamp sweeps again only the rays that point at what changed
+  (the wedge of directions those spans lie in, as the lamp sees them),
+  each from where it first meets a changed cell (a shadow at a cell
+  depends only on the heights between the lamp and the cell). A long thin
+  thing seen end on is a narrow wedge, however wide the box round it. A lamp that moved, or changed `h`,
   `radius` or `shadows`, is worked out again by itself; one whose colour
   or power changed is only added up again; one no longer in the list is
   taken out. The result is the light the same room would get lit from

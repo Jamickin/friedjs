@@ -7,6 +7,20 @@ equal `package.json`'s `version` and `fried.js`'s `VERSION` export
 (`tests/version.test.js` checks it). Why each change was made is in
 `evolution/EVOLUTION.md`.
 
+## [0.11.0] - 2026-11-25
+
+The same day's second pass over the game's frame (`evolution/EVOLUTION.md`
+entry 28). No new API.
+
+### Changed
+- `addons/fried-light.js`: `relight()` finds what changed in the heights row
+  by row (the span of changed cells in each row), not as one box, and picks
+  the rays to sweep again by the wedge of directions those spans lie in as
+  each lamp sees them. An arm lying across a desk is a wide box and a
+  narrow wedge: the game's hand costs a fifth fewer rays (803 to 632 a
+  frame of 2,688), and a lamp is swept whole a fifth as often. The result
+  is unchanged: still the light of a room lit from nothing, bit for bit.
+
 ## [0.10.0] - 2026-11-25
 
 The game's player asked for "high performance high impact" at fine grids
