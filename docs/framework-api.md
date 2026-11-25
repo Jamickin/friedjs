@@ -375,7 +375,11 @@ import { createPointer } from "./fried-pointer.js";
   last button up as down and up events (the ones between arrive as moves
   that name the button), and those are turned back into a down and an up
   here, so no press is left open. Losing the pointer capture ends every
-  press, as `cancel()` does.
+  press, as `cancel()` does. A hold is final by default (moved afterwards,
+  it is no drag); `dragAfterHold` (`true`, or a function of the press,
+  which can read the `data` set in `onDown`) lets a held press become a drag
+  as well once it moves past `dragPx`, with `press.held` still true: for a
+  thing that answers being held and can then be carried off.
 
 ## fried-raster.js — optional shapes in character cells
 

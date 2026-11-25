@@ -7,6 +7,17 @@ equal `package.json`'s `version` and `fried.js`'s `VERSION` export
 (`tests/version.test.js` checks it). Why each change was made is in
 `evolution/EVOLUTION.md`.
 
+## [0.13.0] - 2026-11-25
+
+### Added
+- `addons/fried-pointer.js`: `dragAfterHold` (`true`, or a function of the
+  press). A press that had become a hold could never become a drag, so a
+  thing that lights up while held could not then be carried off by moving
+  the mouse; the player had to let go and press again, and the light went
+  out between. With the option, moving past `dragPx` after the hold starts a
+  drag too (`press.held` stays true). The default is unchanged
+  (`evolution/EVOLUTION.md` entry 31).
+
 ## [0.12.1] - 2026-11-25
 
 ### Fixed

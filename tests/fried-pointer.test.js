@@ -17,6 +17,34 @@ function rig(extra = {}) {
   return { ptr, log, t };
 }
 
+test("fried-pointer: a hold is final by default; with dragAfterHold, moved afterwards it becomes a drag as well", () => {
+  // By default: held, then moved, it is neither a drag nor a tap.
+  const a = rig();
+  a.ptr.props.onpointerdown(ev(10, 10)); a.t.fire();
+  a.ptr.props.onpointermove(ev(30, 10)); a.ptr.props.onpointerup(ev(30, 10));
+  assert.deepEqual(a.log, ["down:0@10,10", "hold:0@10,10", "up:0@30,10"]);
+  // dragAfterHold: true.
+  const b = rig({ dragAfterHold: true });
+  b.ptr.props.onpointerdown(ev(10, 10)); b.t.fire();
+  b.ptr.props.onpointermove(ev(12, 10));                       // (within dragPx: still only held)
+  b.ptr.props.onpointermove(ev(30, 10)); b.ptr.props.onpointerup(ev(30, 10));
+  assert.deepEqual(b.log, ["down:0@10,10", "hold:0@10,10", "dragstart:0@10,10", "drag:0@30,10", "dragend:0@30,10", "up:0@30,10"]);
+  // As a function of the press: only where the press's own data says so, and press.held tells onDragStart it was held.
+  let heldAtStart = null;
+  const c = rig({ dragAfterHold: (press) => press.data === "carry", onDragStart: (p, press) => { heldAtStart = press.held; } });
+  c.ptr.props.onpointerdown(ev(10, 10)); [...c.ptr.presses.values()][0].data = "carry"; c.t.fire();
+  c.ptr.props.onpointermove(ev(30, 10)); c.ptr.props.onpointerup(ev(30, 10));
+  assert.equal(heldAtStart, true, "the drag knows it began as a hold");
+  const d = rig({ dragAfterHold: (press) => press.data === "carry" });
+  d.ptr.props.onpointerdown(ev(10, 10, 2)); d.t.fire();
+  d.ptr.props.onpointermove(ev(30, 10, 2)); d.ptr.props.onpointerup(ev(30, 10, 2));
+  assert.ok(!d.log.some((l) => l.startsWith("drag")), "a press whose data does not say so stays a hold: " + d.log);
+  // A press moved before it was held is a plain drag either way, and no hold.
+  const e = rig({ dragAfterHold: true });
+  e.ptr.props.onpointerdown(ev(10, 10)); e.ptr.props.onpointermove(ev(30, 10)); e.t.fire(); e.ptr.props.onpointerup(ev(30, 10));
+  assert.ok(!e.log.some((l) => l.startsWith("hold")), e.log.join(" "));
+});
+
 test("fried-pointer: down and up without moving is a tap", () => {
   const { ptr, log, t } = rig();
   ptr.props.onpointerdown(ev(10, 10));

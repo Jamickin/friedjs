@@ -22,6 +22,12 @@
 // never drags, and no amount of wobble will cost it its tap or its hold (a
 // hand that only clicks and holds should not need a steady mouse).
 //
+// A hold is final by default: moved afterwards, it does not become a drag.
+// dragAfterHold (true, or a function of the press) lets it: onHold has been
+// called, and moving past dragPx then starts a drag as well (press.held stays
+// true, so onDragStart can tell). For a thing that answers being held (it
+// lights up) and can still be picked up and carried off once it has.
+//
 // A mouse reports only its FIRST button down and its LAST button up as
 // pointerdown / pointerup; a second button pressed or let go in between
 // arrives as a pointermove that names the button. Those are turned back into
@@ -36,7 +42,7 @@
 export function createPointer(opts = {}) {
   const {
     toLocal = (x, y) => ({ x, y }),
-    holdMs = 450, dragPx = 4,
+    holdMs = 450, dragPx = 4, dragAfterHold = false,
     setTimer = (fn, ms) => setTimeout(fn, ms), clearTimer = (id) => clearTimeout(id),
     now = () => (typeof performance !== "undefined" ? performance.now() : Date.now()),
     preventContextMenu = true,
@@ -45,6 +51,7 @@ export function createPointer(opts = {}) {
   const presses = new Map();
   const ptr = { at: null, inside: false, presses, props: {}, cancel };
   const slop = (button) => (typeof dragPx === "function" ? dragPx(button) : dragPx);
+  const afterHold = (press) => (typeof dragAfterHold === "function" ? !!dragAfterHold(press) : !!dragAfterHold);
   const BIT = [1, 4, 2, 8, 16];                     // e.button -> its bit in e.buttons
   // A press that is over, however it ended: no tap.
   function end(press, p, e) {
@@ -97,7 +104,7 @@ export function createPointer(opts = {}) {
       if (!press.moved && Math.hypot(e.clientX - press.px, e.clientY - press.py) > slop(press.button)) {
         press.moved = true;
         clearTimer(press.timer);
-        if (!press.held) { press.dragging = true; call("onDragStart", press.start, press, e); }
+        if (!press.held || afterHold(press)) { press.dragging = true; call("onDragStart", press.start, press, e); }
       }
       if (press.dragging) call("onDrag", p, press, e);
     }
