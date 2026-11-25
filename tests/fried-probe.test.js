@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createTimers, createMouse, gridText, findText } from "../addons/fried-probe.js";
+import { createTimers, createMouse, gridText, findText, createRandom, series, watchErrors } from "../addons/fried-probe.js";
 import { createPointer } from "../addons/fried-pointer.js";
 import { createGrid } from "../addons/fried-grid.js";
 import { createGridUi } from "../addons/fried-grid-ui.js";
@@ -102,4 +102,42 @@ test("fried-probe: find a button on the grid, click it with the mouse, and the U
   assert.equal(clicks, 1);
   frame();
   assert.equal(clicks, 1, "once");
+});
+
+test("fried-probe: createRandom gives the same chance for the same seed, and can stand in for Math.random", () => {
+  const a = createRandom(7), b = createRandom(7), c = createRandom(8);
+  const run = (r) => Array.from({ length: 50 }, () => r());
+  const first = run(a);
+  assert.deepEqual(first, run(b), "the same seed, the same numbers");
+  assert.notDeepEqual(first, run(c));
+  assert.ok(first.every((v) => v >= 0 && v < 1));
+  assert.ok(Math.abs(first.reduce((x, y) => x + y, 0) / 50 - 0.5) < 0.15, "spread over 0..1");
+  const real = Math.random, restore = createRandom(7).install();
+  try { assert.deepEqual(Array.from({ length: 50 }, () => Math.random()), first, "installed, Math.random is it"); } finally { restore(); }
+  assert.equal(Math.random, real, "and the real one is put back");
+});
+
+test("fried-probe: series tells a drift from a jump and a breath from a flicker", () => {
+  const breath = Array.from({ length: 120 }, (_, i) => 1 + 0.1 * Math.sin(i / 19)), flicker = Array.from({ length: 120 }, (_, i) => 1 + (i % 2 ? 0.1 : -0.1));
+  const b = series(breath), f = series(flicker);
+  assert.ok(Math.abs(b.span - 0.2) < 0.01 && Math.abs(f.span - 0.2) < 1e-9, "as far apart, both");
+  assert.ok(b.turns <= 3 && f.turns === 118, "a breath turns twice in two minutes; a flicker every time: " + b.turns + ", " + f.turns);
+  assert.ok(b.step < 0.01 && Math.abs(f.step - 0.2) < 1e-9, "and a breath never moves far at once");
+  const drift = series([0, 1, 2, 3, 4]), jump = series([0, 0, 0, 4, 4]);
+  assert.equal(drift.drift, 4); assert.equal(jump.drift, 4); assert.equal(drift.step, 1); assert.equal(jump.step, 4, "a jump shows in the step");
+  assert.equal(drift.turns, 0); assert.deepEqual([drift.min, drift.max, drift.mean, drift.n], [0, 4, 2, 5]);
+  assert.equal(series([1, 2, 2, 2, 1]).turns, 1, "a pause at the top is one turn, not two");
+  assert.equal(series([]).n, 0); assert.equal(series([3]).span, 0);
+});
+
+test("fried-probe: watchErrors keeps what an app reports while nobody reads the console", () => {
+  const realError = console.error, realWarn = console.warn, listeners = {};
+  const target = { addEventListener: (k, f) => { listeners[k] = f; }, removeEventListener: (k) => { delete listeners[k]; } };
+  const w = watchErrors({ target, quiet: true });
+  console.error("the save would not open:", new Error("no disk")); console.warn("slow frame", { ms: 40 });
+  listeners.error({ message: "x is not a function" }); listeners.unhandledrejection({ reason: new Error("fetch failed") });
+  assert.deepEqual(w.stop(), ["error: the save would not open: no disk", 'warn: slow frame {"ms":40}', "uncaught: x is not a function", "uncaught: fetch failed"]);
+  assert.equal(console.error, realError); assert.equal(console.warn, realWarn); assert.deepEqual(Object.keys(listeners), [], "and everything is put back");
+  const none = watchErrors({ target: null, quiet: true });
+  assert.deepEqual(none.stop(), [], "with no window there is only the console to watch");
 });

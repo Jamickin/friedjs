@@ -7,6 +7,19 @@ equal `package.json`'s `version` and `fried.js`'s `VERSION` export
 (`tests/version.test.js` checks it). Why each change was made is in
 `evolution/EVOLUTION.md`.
 
+## [0.12.0] - 2026-11-25
+
+A pass spent making the game hold up found the same three helpers written
+by hand again and again in its tests (`evolution/EVOLUTION.md` entry 29).
+Additive.
+
+### Added
+- `addons/fried-probe.js`: `createRandom(seed)` (chance from a seed, with
+  `install()` to stand in for `Math.random`), `series(values)` (how a
+  number moved over time: its span, its largest step, how often it
+  turned), `watchErrors()` (what an app reports to the console and the
+  window while a script drives it).
+
 ## [0.11.0] - 2026-11-25
 
 The same day's second pass over the game's frame (`evolution/EVOLUTION.md`

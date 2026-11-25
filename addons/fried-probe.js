@@ -141,3 +141,63 @@ export function findText(grid, text, nth = 0) {
   }
   return null;
 }
+
+// -- chance, time and trouble ------------------------------------------------------------
+// A test that passes has to pass every time, and most apps roll dice. A
+// source of chance from a seed: `rnd()` gives 0..1 like Math.random, the same
+// run of numbers for the same seed. `rnd.install()` puts it in Math.random's
+// place and hands back the function that puts the real one back.
+export function createRandom(seed = 1) {
+  let s = seed >>> 0;
+  const rnd = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+  rnd.install = () => { const real = Math.random; Math.random = rnd; return () => { Math.random = real; }; };
+  return rnd;
+}
+
+// How a number moved over time. A still picture cannot tell a light that
+// breathes from one that flickers, or a thing that drifts from one that
+// jumps; a run of readings can. Give the readings in order: `span` is how far
+// apart the least and the most are, `step` the most it changed between two
+// readings next to each other (a jump shows here), `turns` how often it went
+// from rising to falling or back (a flicker shows here), `drift` the last
+// reading less the first.
+export function series(values) {
+  const n = values.length;
+  if (!n) return { n: 0, min: NaN, max: NaN, mean: NaN, span: 0, step: 0, turns: 0, drift: 0 };
+  let min = Infinity, max = -Infinity, sum = 0, step = 0, turns = 0, was = 0;
+  for (let i = 0; i < n; i++) {
+    const v = values[i];
+    if (v < min) min = v;
+    if (v > max) max = v;
+    sum += v;
+    if (i > 0) {
+      const d = v - values[i - 1];
+      if (Math.abs(d) > step) step = Math.abs(d);
+      if (d !== 0) { if (was !== 0 && (d > 0) !== (was > 0)) turns++; was = d; }
+    }
+  }
+  return { n, min, max, mean: sum / n, span: max - min, step, turns, drift: values[n - 1] - values[0] };
+}
+
+// Trouble an app reports while a test drives it and nobody reads the
+// console: every console.error and console.warn, and (where there is a
+// window) every uncaught error and unhandled rejection, kept as lines.
+// `stop()` puts the console back and returns them. `quiet: true` keeps them
+// off the real console meanwhile.
+export function watchErrors({ target = globalThis, quiet = false } = {}) {
+  const seen = [], real = { error: console.error, warn: console.warn };
+  const text = (a) => a.map((x) => (x instanceof Error ? x.message : typeof x === "string" ? x : (() => { try { return JSON.stringify(x); } catch { return String(x); } })())).join(" ");
+  console.error = (...a) => { seen.push("error: " + text(a)); if (!quiet) real.error(...a); };
+  console.warn = (...a) => { seen.push("warn: " + text(a)); if (!quiet) real.warn(...a); };
+  const onError = (e) => { seen.push("uncaught: " + ((e && (e.message || (e.reason && (e.reason.message || String(e.reason))))) || String(e))); };
+  const listens = target && typeof target.addEventListener === "function";
+  if (listens) { target.addEventListener("error", onError); target.addEventListener("unhandledrejection", onError); }
+  return {
+    seen,
+    stop() {
+      console.error = real.error; console.warn = real.warn;
+      if (listens) { target.removeEventListener("error", onError); target.removeEventListener("unhandledrejection", onError); }
+      return seen;
+    },
+  };
+}

@@ -978,7 +978,7 @@ addons. The map's browser lines (`T:`, `CSS:`, the `!` lines) and most
 ## fried-probe.js — optional tests with no screen
 
 ```js
-import { createMouse, createTimers, gridText, findText } from "./fried-probe.js";
+import { createMouse, createTimers, gridText, findText, createRandom, series, watchErrors } from "./fried-probe.js";
 ```
 
 An app whose logic is plain functions and plain data needs no browser to
@@ -1010,6 +1010,24 @@ each, take about a third of a second, and its 91 tests two and a half.)
   of it) as text, one line per row.
 - `findText(grid, text, nth?)` -> `{ x, y }` of where that text is drawn,
   or null: find a button by its words, then click it.
+- `createRandom(seed)` -> `rnd()`, 0..1 like `Math.random`, the same run
+  of numbers for the same seed; `rnd.install()` puts it in `Math.random`'s
+  place and returns the function that puts the real one back. An app that
+  rolls dice is tested from a seed, so a test that passes passes every
+  time and a failure can be run again.
+- `series(values)` -> `{ n, min, max, mean, span, step, turns, drift }`:
+  how a number moved over a run of readings. `step` is the most it
+  changed between two readings next to each other (a jump shows there),
+  `turns` how often it went from rising to falling or back (a flicker
+  shows there). A still frame cannot tell a light that breathes from one
+  that flickers, or a thing that drifts from one that jumps; stepping the
+  clock and reading a value each step can.
+- `watchErrors({ target?, quiet? })` -> `{ seen, stop() }`: every
+  `console.error` and `console.warn`, and on a `target` that has events
+  (the window) every uncaught error and unhandled rejection, kept as lines
+  while a script drives the app; `stop()` puts everything back and returns
+  them. For a whole session run through the real page, where nobody is
+  reading the console.
 
 For a simulation driven by `fried-loop`, call its `update` yourself (or
 `loop.tick(ms)`) for as many steps as the test needs; nothing has to wait
