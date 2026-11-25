@@ -289,7 +289,7 @@ integers.
   or that function itself). The layer remembers the bounds of what was
   set, so `clear` and `blit` cost only the marks, not the whole grid;
   after writing `v` directly, call `touch(x0, y0, x1, y1)`.
-- `createGridRenderer({ canvas, overlay?, font?, weight?, alpha? })` -> draws
+- `createGridRenderer({ canvas, overlay?, font?, weight?, alpha?, pixels? })` -> draws
   grids on a canvas. `resize(cols, rows, cssWidth, cssHeight, dpr)` fits
   whole device pixels per cell; `draw(grid)` redraws changed cells and
   returns how many; `sprites(list)` draws loose glyphs at fractional cell
@@ -299,6 +299,18 @@ integers.
   draw every glyph afresh too, once a web font has loaded), `stats`. Each glyph in each
   colour is drawn once into an atlas and blitted from then on; Braille and
   block characters are drawn as rectangles, so they tile whatever the font.
+  With `pixels: true` nothing is blitted: each glyph is kept as a mask (how
+  much ink each pixel of a cell gets), a changed cell is written straight
+  into one `ImageData`, and each band of changed rows goes to the canvas in
+  one `putImageData`. A frame then costs the pixels that changed, not two
+  canvas calls a cell: measured on a 313 x 101 grid of 3 x 6 pixel cells,
+  1,300 changed cells cost 5.5 ms without it and 0.5 ms with it, and a
+  full repaint 149 ms and 5 ms. Use it for a fine grid, or one where a
+  light moves. The picture is the same to within a few levels: a browser
+  gives dark text less ink than light text, so a glyph drawn as text has
+  eight masks, one for each band of ink brightness (`stats.atlas` counts
+  masks). It needs a real 2D canvas (`createImageData`, `getImageData`,
+  `putImageData`).
 - `rgb(r, g, b)`, `hex("#rrggbb")`, `cssColor(c)` -> colour conversion.
 - `litColor(c, r, g, b)`, `scaleColor(c, k)`, `addColor(a, b)`,
   `mixColor(a, b, t)`, `luma(c)`, `quantize(c, bits)` -> colour arithmetic,
@@ -410,7 +422,7 @@ cell background colour at all.
 
 - `createLighting(cols, rows, { aspect? })` -> `{ height, nx, ny, nz, r, g,
   b, lum, shade, maxHeight, clearHeights, normals, ambient, addField, point,
-  spill, finish }`. Each frame: write `height` (in rows), call `normals()`, then
+  relight, restore, kept, spill, finish }`. Each frame: write `height` (in rows), call `normals()`, then
   `ambient(r, g, b)`, any `addField(lightField, k)` (a `createLight`
   field worked out some other way: moonlight), one `point({ x, y, h,
   radius, color, power, shadows })` per lamp (x, y in cells; h and radius
@@ -427,6 +439,27 @@ cell background colour at all.
   shining cell gives `k` of its colour to the cells within `radius` rows,
   most to the nearest. It costs only the cells that shine (a blur of a
   whole field costs every cell, every pass).
+  The KEPT light, for a scene where most things stand still:
+  `relight({ ambient, fields, lights, refresh? })` gives the same light as
+  `normals()`, `ambient()`, `addField()` for each `[field, k]` of `fields`
+  and `point()` for each of `lights`, into `kept` (`{ r, g, b }`), and
+  remembers each lamp's share. Called again, it finds the box of cells
+  whose height changed, works the normals out again inside it, and for
+  each lamp sweeps again only the rays that pass through that box, from
+  where they enter it (a shadow at a cell depends only on the heights
+  between the lamp and the cell). A lamp that moved, or changed `h`,
+  `radius` or `shadows`, is worked out again by itself; one whose colour
+  or power changed is only added up again; one no longer in the list is
+  taken out. The result is the light the same room would get lit from
+  nothing, to the last bit. A lamp is known from call to call by its `id`
+  (or its place in the list). `fields` are taken to be steady (read again
+  when the list changes, or with `refresh: true`). It returns `{ changed,
+  x0, y0, x1, y1, full, partial, rays }`: whether anything changed and in
+  which box of cells, how many lamps were worked out whole and in part,
+  and how many rays were swept. `restore()` copies `kept` to `r`, `g`,
+  `b`, so a frame's quick lights (`point` with `shadows: false`, `spill`)
+  go on top and `finish()` ends it. Do not call `normals()` or `ambient()`
+  as well: `relight` does both.
 - `toneGlyph(chars, t, jitter?, bands?)` -- the glyph for a brightness
   from a ramp of characters (nothing to dense); `jitter` (-0.5..0.5, a
   stable hash of the cell) roughens the band edges, `bands` snaps to hard

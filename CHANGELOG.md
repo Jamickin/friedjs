@@ -7,6 +7,33 @@ equal `package.json`'s `version` and `fried.js`'s `VERSION` export
 (`tests/version.test.js` checks it). Why each change was made is in
 `evolution/EVOLUTION.md`.
 
+## [0.10.0] - 2026-11-25
+
+The game's player asked for "high performance high impact" at fine grids
+(324 x 124 characters and finer). Measured first, in Node and then in the
+browser, the two largest costs were both in FriedJS: a moving hand relit
+the whole room, and the canvas paid two calls for every changed cell
+(`evolution/EVOLUTION.md` entries 25-27). Additive.
+
+### Added
+- `addons/fried-light.js`: `relight({ ambient, fields, lights, refresh })`,
+  the KEPT light. Each lamp's share is remembered; when heights change,
+  only the rays that pass through the changed box are swept again, from
+  where they enter it; a lamp that moved is worked out again by itself; a
+  colour change is only added up again. The result is the light the same
+  room would get lit from nothing, to the last bit (a property test moves
+  random things under random lamps and compares). `restore()` puts the
+  kept light (`kept`) in `r`, `g`, `b` for a frame's quick lights.
+- `addons/fried-grid.js`: `createGridRenderer({ pixels: true })`. Glyphs
+  are kept as masks, changed cells are written into one `ImageData`, and
+  each band of changed rows is one `putImageData`. A frame costs the
+  pixels that changed. Measured at 313 x 101 (3 x 6 pixel cells): 1,300
+  changed cells 5.5 ms -> 0.5 ms; a full repaint 149 ms -> 5 ms.
+
+### Changed
+- `addons/fried-light.js`: `normals()` and the sweep inside `point()` are
+  the same code `relight()` uses (no change in what they compute).
+
 ## [0.9.0] - 2026-11-24
 
 The game's owner, on seeing 120,000 random actions tested in a minute:

@@ -273,6 +273,18 @@ export function createDots(cols, rows) {
 //
 //   alpha    true lets cells whose paper is TRANSPARENT show what is behind
 //            the canvas (a UI grid over a scene grid)
+//   pixels   true draws by writing pixels, not by canvas calls: each glyph
+//            is kept once as a mask (how much ink each pixel of a cell
+//            gets), a changed cell is written straight into one ImageData,
+//            and each band of changed rows goes to the canvas in one
+//            putImageData. What a frame costs is then the pixels that
+//            changed. Without it every changed cell is a fillRect and a
+//            drawImage, and every (glyph, colour) pair a slot in an atlas:
+//            fine for a few hundred cells a frame, slow for thousands (a
+//            light that moves over a fine grid). The picture is the same to
+//            within a few levels: a browser draws dark text thinner than
+//            light text, so a glyph has eight masks, one for each band of
+//            ink brightness, each drawn by the browser in a grey that bright.
 //
 // r.resize(cols, rows, cssWidth, cssHeight, dpr)   fit the grid to a box
 // r.draw(grid)       redraw the cells whose key changed; returns how many
@@ -283,18 +295,41 @@ export function createDots(cols, rows) {
 // r.stats            { drawn, cells, atlas }
 
 const BRAILLE_DOT = [[0x01, 0, 0], [0x02, 0, 1], [0x04, 0, 2], [0x40, 0, 3], [0x08, 1, 0], [0x10, 1, 1], [0x20, 1, 2], [0x80, 1, 3]];
+// An ImageData's bytes run R, G, B, A. Read as 32-bit words that is A B G R on
+// nearly every machine (the low byte first), and R G B A on the few that put
+// the high byte first.
+const BYTES_RGBA = new Uint8Array(new Uint32Array([0x01020304]).buffer)[0] === 1;
+// Which of eight bands of brightness an ink is in: its luminance worked out
+// in linear light and brought back, the way text rasterisers judge it.
+const LINEAR = Float32Array.from({ length: 256 }, (_, v) => Math.pow(v / 255, 2.2));
+function inkBand(c) {
+  const y = LINEAR[(c >> 16) & 255] * 0.2126 + LINEAR[(c >> 8) & 255] * 0.7152 + LINEAR[c & 255] * 0.0722;
+  const band = (Math.pow(y, 1 / 2.2) * 255 + 0.5) >> 5;
+  return band > 7 ? 7 : band;
+}
 
-export function createGridRenderer({ canvas, overlay = null, font = "monospace", weight = "400", makeCanvas = null, alpha = false }) {
+export function createGridRenderer({ canvas, overlay = null, font = "monospace", weight = "400", makeCanvas = null, alpha = false, pixels = false }) {
   const newCanvas = makeCanvas || (() => document.createElement("canvas"));
   const ctx = canvas.getContext("2d", { alpha });
   const octx = overlay ? overlay.getContext("2d") : null;
   let cols = 0, rows = 0, cw = 0, chh = 0, dpr = 1, fontPx = 0;
   let pCh = null, pFg = null, pBg = null, full = true;
   let atlas = null, actx = null, slots = new Map(), perRow = 0, capacity = 0;
+  // (pixels: the picture, its pixels as 32-bit words, each glyph's mask, the
+  // small canvas a glyph is drawn on to get its mask, and the cells changed
+  // in each row this frame.)
+  let img = null, px = null, masks = new Map(), mctx = null, rowLo = null, rowHi = null;
   const stats = { drawn: 0, cells: 0, atlas: 0 };
 
   function buildAtlas() {
     if (!cw || !chh) return;
+    if (pixels) {
+      img = ctx.createImageData(cols * cw, rows * chh); px = new Uint32Array(img.data.buffer);
+      const m = newCanvas(); m.width = cw; m.height = chh;
+      mctx = m.getContext("2d", { willReadFrequently: true });
+      masks = new Map(); rowLo = new Int32Array(rows); rowHi = new Int32Array(rows);
+      return;
+    }
     atlas = newCanvas();
     perRow = Math.max(8, Math.floor(2048 / cw));
     const rowsA = Math.max(8, Math.floor(2048 / chh));
@@ -332,32 +367,108 @@ export function createGridRenderer({ canvas, overlay = null, font = "monospace",
     slots.set(key, s);
     const x = (s % perRow) * cw, y = Math.floor(s / perRow) * chh;
     actx.clearRect(x, y, cw, chh);
-    actx.fillStyle = cssColor(color);
+    inkGlyph(actx, ch, x, y, color);
+    return s;
+  }
+
+  // One glyph, in one colour, in the cell whose corner is (x, y) of `c`.
+  function inkGlyph(c, ch, x, y, color) {
+    c.fillStyle = cssColor(color);
     if (ch >= 0x2800 && ch <= 0x28ff) {
       // Braille, drawn as real dots so it is crisp whatever the font has.
       const bits = ch - 0x2800, dw = Math.max(1, Math.round(cw * 0.3)), dh = Math.max(1, Math.round(chh * 0.15));
       for (const [bit, dx, dy] of BRAILLE_DOT) {
-        if (bits & bit) actx.fillRect(x + Math.round(cw * (0.25 + 0.5 * dx) - dw / 2), y + Math.round(chh * (0.125 + 0.25 * dy) - dh / 2), dw, dh);
+        if (bits & bit) c.fillRect(x + Math.round(cw * (0.25 + 0.5 * dx) - dw / 2), y + Math.round(chh * (0.125 + 0.25 * dy) - dh / 2), dw, dh);
       }
-    } else if (ch === 0x2588) actx.fillRect(x, y, cw, chh);
-    else if (ch === 0x2580) actx.fillRect(x, y, cw, Math.round(chh / 2));
-    else if (ch === 0x2584) actx.fillRect(x, y + Math.round(chh / 2), cw, chh - Math.round(chh / 2));
-    else if (ch === 0x258c) actx.fillRect(x, y, Math.round(cw / 2), chh);
-    else if (ch === 0x2590) actx.fillRect(x + Math.round(cw / 2), y, cw - Math.round(cw / 2), chh);
-    else if (ch >= 0x2591 && ch <= 0x2593) { actx.globalAlpha = (ch - 0x2590) * 0.25; actx.fillRect(x, y, cw, chh); actx.globalAlpha = 1; }
+    } else if (ch === 0x2588) c.fillRect(x, y, cw, chh);
+    else if (ch === 0x2580) c.fillRect(x, y, cw, Math.round(chh / 2));
+    else if (ch === 0x2584) c.fillRect(x, y + Math.round(chh / 2), cw, chh - Math.round(chh / 2));
+    else if (ch === 0x258c) c.fillRect(x, y, Math.round(cw / 2), chh);
+    else if (ch === 0x2590) c.fillRect(x + Math.round(cw / 2), y, cw - Math.round(cw / 2), chh);
+    else if (ch >= 0x2591 && ch <= 0x2593) { c.globalAlpha = (ch - 0x2590) * 0.25; c.fillRect(x, y, cw, chh); c.globalAlpha = 1; }
     else {
-      actx.save();
-      actx.beginPath(); actx.rect(x, y, cw, chh); actx.clip();
-      actx.font = `${weight} ${fontPx}px ${font}`;
-      actx.textAlign = "center"; actx.textBaseline = "middle";
-      actx.fillText(String.fromCodePoint(ch), x + cw / 2, y + chh / 2 + chh * 0.04);
-      actx.restore();
+      c.save();
+      c.beginPath(); c.rect(x, y, cw, chh); c.clip();
+      c.font = `${weight} ${fontPx}px ${font}`;
+      c.textAlign = "center"; c.textBaseline = "middle";
+      c.fillText(String.fromCodePoint(ch), x + cw / 2, y + chh / 2 + chh * 0.04);
+      c.restore();
     }
-    return s;
+  }
+
+  // (pixels) A glyph's mask: how much ink each pixel of a cell gets, 0..255,
+  // drawn once and read back. null for a glyph with no ink at all. A browser
+  // gives dark text less ink than light text (at five pixels, white gets
+  // twice what black does), so a glyph drawn as text has a mask for each of
+  // eight bands of ink brightness, drawn in a grey of that brightness.
+  function maskOf(ch, ink) {
+    const shape = (ch >= 0x2800 && ch <= 0x28ff) || (ch >= 0x2580 && ch <= 0x2593), band = shape ? 7 : inkBand(ink), key = ch * 8 + band;
+    let m = masks.get(key);
+    if (m !== undefined) return m;
+    if (masks.size >= 16384) masks = new Map();
+    mctx.clearRect(0, 0, cw, chh);
+    const v = band << 5 | band << 2 | band >> 1;
+    inkGlyph(mctx, ch, 0, 0, v << 16 | v << 8 | v);
+    const d = mctx.getImageData(0, 0, cw, chh).data, size = cw * chh;
+    m = new Uint8Array(size);
+    let any = 0;
+    for (let i = 0; i < size; i++) { m[i] = d[i * 4 + 3]; any |= m[i]; }
+    if (!any) m = null;
+    masks.set(key, m);
+    return m;
+  }
+
+  // (pixels) Changed cells are written into the picture; then each band of
+  // rows that changed goes to the canvas at once.
+  function drawPixels(grid) {
+    const { ch, fg, bg } = grid, W = cols * cw;
+    let drawn = 0, y0 = rows, y1 = -1;
+    for (let cy = 0, i = 0; cy < rows; cy++) {
+      let lo = cols, hi = -1;
+      for (let cx = 0; cx < cols; cx++, i++) {
+        const c = ch[i], f = fg[i], b = bg[i];
+        if (!full && c === pCh[i] && f === pFg[i] && b === pBg[i]) continue;
+        pCh[i] = c; pFg[i] = f; pBg[i] = b;
+        if (cx < lo) lo = cx;
+        hi = cx; drawn++;
+        const clear = b === TRANSPARENT, paper = clear ? 0 : BYTES_RGBA ? ((b & 0xffffff) << 8 | 255) >>> 0 : (0xff000000 | (b & 255) << 16 | (b & 0xff00) | (b >> 16) & 255) >>> 0;
+        const mask = c === 32 || c === 0x2800 || f === b ? null : maskOf(c, f);
+        let o = cy * chh * W + cx * cw;
+        if (!mask) { for (let yy = 0; yy < chh; yy++, o += W) px.fill(paper, o, o + cw); continue; }
+        const fr = (f >> 16) & 255, fgn = (f >> 8) & 255, fb = f & 255, br = (b >> 16) & 255, bgn = (b >> 8) & 255, bb = b & 255;
+        const rgbInk = BYTES_RGBA ? ((f & 0xffffff) << 8) >>> 0 : (fb << 16 | fgn << 8 | fr) >>> 0, ink = BYTES_RGBA ? (rgbInk | 255) >>> 0 : (0xff000000 | rgbInk) >>> 0;
+        for (let yy = 0, mo = 0; yy < chh; yy++, o += W - cw) {
+          for (let xx = 0; xx < cw; xx++, o++, mo++) {
+            const a = mask[mo];
+            if (a === 0) px[o] = paper;
+            else if (clear) px[o] = BYTES_RGBA ? (rgbInk | a) >>> 0 : (a << 24 | rgbInk) >>> 0;       // (ink over nothing: its own alpha)
+            else if (a === 255) px[o] = ink;
+            else {
+              const r = br + (((fr - br) * a + 127) / 255 | 0), g = bgn + (((fgn - bgn) * a + 127) / 255 | 0), bl = bb + (((fb - bb) * a + 127) / 255 | 0);
+              px[o] = BYTES_RGBA ? (r << 24 | g << 16 | bl << 8 | 255) >>> 0 : (0xff000000 | bl << 16 | g << 8 | r) >>> 0;
+            }
+          }
+        }
+      }
+      rowLo[cy] = lo; rowHi[cy] = hi;
+      if (hi >= 0) { if (cy < y0) y0 = cy; y1 = cy; }
+    }
+    // Rows that changed and lie together go up together.
+    for (let cy = y0; cy <= y1; cy++) {
+      if (rowHi[cy] < 0) continue;
+      let lo = rowLo[cy], hi = rowHi[cy], end = cy;
+      while (end + 1 <= y1 && rowHi[end + 1] >= 0) { end++; if (rowLo[end] < lo) lo = rowLo[end]; if (rowHi[end] > hi) hi = rowHi[end]; }
+      ctx.putImageData(img, 0, 0, lo * cw, cy * chh, (hi - lo + 1) * cw, (end - cy + 1) * chh);
+      cy = end;
+    }
+    full = false;
+    stats.drawn = drawn; stats.cells = cols * rows; stats.atlas = masks.size;
+    return drawn;
   }
 
   function draw(grid) {
     if (!pCh || grid.cols !== cols || grid.rows !== rows) return 0;
+    if (pixels) return drawPixels(grid);
     const { ch, fg, bg } = grid;
     let drawn = 0, lastBg = -1;
     for (let i = 0, n = cols * rows; i < n; i++) {
