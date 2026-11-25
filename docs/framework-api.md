@@ -296,7 +296,11 @@ integers.
   positions on the `overlay` canvas (`{ x, y, ch, color, alpha?, scale?,
   add?, glow? }`), so smooth motion never dirties the cell layer;
   `cellAt(clientX, clientY)`, `invalidate()` (pass `{ atlas: true }` to
-  draw every glyph afresh too, once a web font has loaded), `stats`. Each glyph in each
+  draw every glyph afresh too), `stats`. Whenever a font finishes loading
+  (`document.fonts`, or the `fonts` you pass; `null` for none) it draws
+  every glyph afresh by itself: a web font arrives when it is first asked
+  for, after the first glyphs were drawn in its stand-in, and a glyph is
+  drawn once and kept. Each glyph in each
   colour is drawn once into an atlas and blitted from then on; Braille and
   block characters are drawn as rectangles, so they tile whatever the font.
   With `pixels: true` nothing is blitted: each glyph is kept as a mask (how

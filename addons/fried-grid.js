@@ -291,7 +291,8 @@ export function createDots(cols, rows) {
 // r.sprites(list)    [{ x, y, ch, color, alpha?, scale?, add?, glow? }], x/y in cells
 // r.cellAt(clientX, clientY) -> { x, y } in (fractional) cells
 // r.invalidate()     force a full redraw next frame; invalidate({ atlas: true })
-//                    also draws every glyph afresh (a web font has arrived)
+//                    also draws every glyph afresh. (The renderer does that
+//                    itself whenever a font finishes loading.)
 // r.stats            { drawn, cells, atlas }
 
 const BRAILLE_DOT = [[0x01, 0, 0], [0x02, 0, 1], [0x04, 0, 2], [0x40, 0, 3], [0x08, 1, 0], [0x10, 1, 1], [0x20, 1, 2], [0x80, 1, 3]];
@@ -308,7 +309,7 @@ function inkBand(c) {
   return band > 7 ? 7 : band;
 }
 
-export function createGridRenderer({ canvas, overlay = null, font = "monospace", weight = "400", makeCanvas = null, alpha = false, pixels = false }) {
+export function createGridRenderer({ canvas, overlay = null, font = "monospace", weight = "400", makeCanvas = null, alpha = false, pixels = false, fonts = undefined }) {
   const newCanvas = makeCanvas || (() => document.createElement("canvas"));
   const ctx = canvas.getContext("2d", { alpha });
   const octx = overlay ? overlay.getContext("2d") : null;
@@ -509,6 +510,16 @@ export function createGridRenderer({ canvas, overlay = null, font = "monospace",
     }
     octx.globalAlpha = 1; octx.shadowBlur = 0; octx.globalCompositeOperation = "source-over";
   }
+
+  // A web font arrives when it is first asked for, which is after the first
+  // glyphs were drawn in whatever stood in for it; and document.fonts.ready
+  // resolved long before, when nothing was loading yet. A glyph is drawn
+  // once and kept, so those would stay in the stand-in font for good, beside
+  // later ones in the real font. Whenever a font finishes loading, every
+  // glyph is drawn afresh. (`fonts`: the FontFaceSet to listen to; the
+  // document's own by default, null for none.)
+  const fontSet = fonts === undefined ? (typeof document !== "undefined" ? document.fonts : null) : fonts;
+  if (fontSet && typeof fontSet.addEventListener === "function") fontSet.addEventListener("loadingdone", () => { if (cw) { full = true; buildAtlas(); } });
 
   function cellAt(clientX, clientY) {
     const r = canvas.getBoundingClientRect();

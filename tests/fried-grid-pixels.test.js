@@ -114,3 +114,29 @@ test("fried-grid pixels: counts the same cells as the canvas-call renderer, fram
     assert.equal(b.draw(g), a.draw(g), "frame " + frame);
   }
 });
+
+test("fried-grid: when a font finishes loading, every glyph is drawn afresh (both ways of drawing)", () => {
+  // A FontFaceSet that can be told a font has arrived.
+  const fontSet = () => { const hear = []; return { addEventListener: (k, f) => { if (k === "loadingdone") hear.push(f); }, arrive: () => hear.forEach((f) => f({})), heard: hear }; };
+  for (const pixels of [true, false]) {
+    const fonts = fontSet(), masks = [], canvas = pixelCanvas([]);
+    const quiet = () => { const c = new Proxy({}, { get: (t, k) => (k in t ? t[k] : () => {}), set: (t, k, v) => { t[k] = v; return true; } }); return { width: 0, height: 0, style: {}, getContext: () => c }; };
+    const r = createGridRenderer({ canvas: pixels ? canvas : quiet(), makeCanvas: pixels ? () => pixelCanvas(masks) : quiet, pixels, fonts });
+    assert.equal(fonts.heard.length, 1, "it listens for fonts arriving");
+    fonts.arrive();                                              // (before it has a size: nothing to do, and no harm)
+    r.resize(20, 10, 80, 60, 1);
+    const g = createGrid(20, 10).clear(" ", 0xffffff, 0x101010);
+    g.put(0, 0, "abc", 0xffffff);
+    assert.equal(r.draw(g), 200); assert.equal(r.draw(g), 0, "drawn, and nothing changed");
+    const made = r.stats.atlas;
+    assert.ok(made >= 3);
+    fonts.arrive();
+    assert.equal(r.draw(g), 200, (pixels ? "pixels" : "canvas calls") + ": the whole grid is drawn again, though no cell changed");
+    assert.equal(r.stats.atlas, made, "with every glyph made again, not kept from before");
+    if (pixels) assert.equal(masks.greys.length, made * 2, "each mask drawn a second time, in the font that is there now");
+    assert.equal(r.draw(g), 0);
+  }
+  const none = createGridRenderer({ canvas: pixelCanvas([]), makeCanvas: () => pixelCanvas([]), pixels: true, fonts: null });
+  none.resize(4, 2, 16, 12, 1);
+  assert.equal(none.draw(createGrid(4, 2).clear(" ", 0xffffff, 0)), 8, "with no font set to listen to it simply draws");
+});

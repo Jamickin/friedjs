@@ -7,6 +7,18 @@ equal `package.json`'s `version` and `fried.js`'s `VERSION` export
 (`tests/version.test.js` checks it). Why each change was made is in
 `evolution/EVOLUTION.md`.
 
+## [0.12.1] - 2026-11-25
+
+### Fixed
+- `addons/fried-grid.js`: glyphs first drawn before their web font had
+  loaded stayed in the stand-in font for good, beside later glyphs in the
+  real one (a glyph is drawn once and kept, and `document.fonts.ready`
+  resolves before a font that loads on first use has been asked for).
+  `createGridRenderer` now listens for `loadingdone` on `document.fonts`
+  (or the `fonts` passed to it) and draws every glyph afresh. Found by
+  reading a canvas back after a whole session in the consumer's real page
+  (`evolution/EVOLUTION.md` entry 30).
+
 ## [0.12.0] - 2026-11-25
 
 A pass spent making the game hold up found the same three helpers written
