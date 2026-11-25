@@ -313,3 +313,12 @@ Every change to FriedJS goes around one loop, and leaves an entry here.
 - tests: `tests/fried-pointer.test.js` +1: by default a held press moved is neither drag nor tap (as before); with `true` it becomes a drag after its hold, and not within `dragPx`; as a function, only where the press's data says so, and `press.held` is true at `onDragStart`; a press moved before its hold is a plain drag with no hold, either way.
 - gates run: (`FRIED_FRICTION_LOG` unset; each run ONCE) see the commit: `npm test`, `npm run build`, `node stress.js`, `node benchmark.js`.
 - consumers migrated: `whmah-ascii` passes `dragAfterHold: (press) => press.button === 0 && press.data && press.data.kind === "stone"`: a stone held (and lit, if live) can be carried off without letting go.
+
+## 32. fried-grid: another font, while running (0.14.0)
+- id: 32
+- date: 2026-11-25
+- friction evidence: `evolution/friction.jsonl` (consumer `whmah-ascii`, op `createGridRenderer font`): the consumer's owner asked for font choices in the game's settings ("gimme some more immersive font options in game in settings ill choose"). `createGridRenderer` took `font` once, at creation, into a closure; the only way to change it was a new renderer, with new canvases and a fresh atlas, and the consumer's own code holding the old one.
+- change: `addons/fried-grid.js`: the font and weight are kept in variables; `setFont(font, weight?)` changes them, rebuilds the atlas (or, with `pixels`, the masks) when the renderer has a size, and marks every cell to be drawn again. A `font` getter says which font it draws in. Same font again: nothing happens and it returns false.
+- tests: `tests/fried-grid-pixels.test.js` +1: in both ways of drawing, the first draw is in the first font; after `setFont` the whole grid is drawn again and the canvas is given the new font; the same font again draws nothing; before a size it only remembers the font.
+- gates run: (`FRIED_FRICTION_LOG` unset; each run ONCE) see the commit: `npm test`, `npm run build`, `node stress.js`, `node benchmark.js`.
+- consumers migrated: `whmah-ascii` offers fonts in its settings menu and calls `setFont` on both of its renderers, then refits.

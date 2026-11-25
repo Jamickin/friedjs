@@ -300,7 +300,10 @@ integers.
   (`document.fonts`, or the `fonts` you pass; `null` for none) it draws
   every glyph afresh by itself: a web font arrives when it is first asked
   for, after the first glyphs were drawn in its stand-in, and a glyph is
-  drawn once and kept. Each glyph in each
+  drawn once and kept. `setFont(font, weight?)` draws in another font from
+  then on (every glyph afresh, the whole grid redrawn; the cell size stays as
+  `resize` set it), for a settings menu that offers fonts; `font` is the one
+  it draws in now. Each glyph in each
   colour is drawn once into an atlas and blitted from then on; Braille and
   block characters are drawn as rectangles, so they tile whatever the font.
   With `pixels: true` nothing is blitted: each glyph is kept as a mask (how

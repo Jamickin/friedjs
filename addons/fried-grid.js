@@ -293,6 +293,10 @@ export function createDots(cols, rows) {
 // r.invalidate()     force a full redraw next frame; invalidate({ atlas: true })
 //                    also draws every glyph afresh. (The renderer does that
 //                    itself whenever a font finishes loading.)
+// r.setFont(font, weight?)  draw in another font from now on: every glyph is
+//                    drawn afresh in it and the whole grid redrawn (a settings
+//                    menu offering fonts). The cell size stays what resize gave.
+// r.font             the font it draws in now
 // r.stats            { drawn, cells, atlas }
 
 const BRAILLE_DOT = [[0x01, 0, 0], [0x02, 0, 1], [0x04, 0, 2], [0x40, 0, 3], [0x08, 1, 0], [0x10, 1, 1], [0x20, 1, 2], [0x80, 1, 3]];
@@ -309,7 +313,8 @@ function inkBand(c) {
   return band > 7 ? 7 : band;
 }
 
-export function createGridRenderer({ canvas, overlay = null, font = "monospace", weight = "400", makeCanvas = null, alpha = false, pixels = false, fonts = undefined }) {
+export function createGridRenderer({ canvas, overlay = null, font: font0 = "monospace", weight: weight0 = "400", makeCanvas = null, alpha = false, pixels = false, fonts = undefined }) {
+  let font = font0, weight = weight0;
   const newCanvas = makeCanvas || (() => document.createElement("canvas"));
   const ctx = canvas.getContext("2d", { alpha });
   const octx = overlay ? overlay.getContext("2d") : null;
@@ -526,5 +531,14 @@ export function createGridRenderer({ canvas, overlay = null, font = "monospace",
     return { x: (clientX - r.left) / r.width * cols, y: (clientY - r.top) / r.height * rows };
   }
 
-  return { resize, draw, sprites, cellAt, invalidate(o) { full = true; if (o && o.atlas) buildAtlas(); }, stats, get cell() { return { w: cw / dpr, h: chh / dpr }; } };
+  // Another font: every glyph drawn again in it, and the whole grid with them.
+  function setFont(f, w = weight) {
+    if (f === font && String(w) === String(weight)) return false;
+    font = f; weight = w;
+    full = true;
+    if (cw) buildAtlas();
+    return true;
+  }
+
+  return { resize, draw, sprites, cellAt, setFont, get font() { return font; }, invalidate(o) { full = true; if (o && o.atlas) buildAtlas(); }, stats, get cell() { return { w: cw / dpr, h: chh / dpr }; } };
 }

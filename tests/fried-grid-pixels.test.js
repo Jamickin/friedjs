@@ -140,3 +140,28 @@ test("fried-grid: when a font finishes loading, every glyph is drawn afresh (bot
   none.resize(4, 2, 16, 12, 1);
   assert.equal(none.draw(createGrid(4, 2).clear(" ", 0xffffff, 0)), 8, "with no font set to listen to it simply draws");
 });
+
+test("fried-grid: setFont draws in another font from then on, both ways of drawing; the same font again changes nothing", () => {
+  for (const pixels of [true, false]) {
+    const fonts = [];
+    const watch = () => { const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : (k === "getImageData" ? (x, y, w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }) : k === "createImageData" ? (w, h) => ({ width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }) : () => {})), set: (t, k, v) => { if (k === "font") fonts.push(v); t[k] = v; return true; } }); return { width: 0, height: 0, style: {}, getContext: () => ctx }; };
+    const r = createGridRenderer({ canvas: watch(), makeCanvas: watch, pixels, font: "Alpha", fonts: null });
+    r.resize(10, 4, 40, 24, 1);
+    const g = createGrid(10, 4).clear(" ", 0xffffff, 0x101010);
+    g.put(0, 0, "ab", 0xffffff);
+    r.draw(g);
+    assert.equal(r.font, "Alpha");
+    assert.ok(fonts.some((f) => f.endsWith("px Alpha")), "drawn in the first font");
+    assert.equal(r.draw(g), 0, "nothing changed, nothing drawn");
+    assert.equal(r.setFont("Beta Mono"), true);
+    assert.equal(r.font, "Beta Mono");
+    assert.equal(r.draw(g), 40, (pixels ? "pixels" : "canvas calls") + ": the whole grid again");
+    assert.ok(fonts.slice(-3).some((f) => f.endsWith("px Beta Mono")), "and in the new font: " + fonts.slice(-3));
+    assert.equal(r.setFont("Beta Mono"), false, "the same font: nothing to do");
+    assert.equal(r.draw(g), 0);
+  }
+  const early = createGridRenderer({ canvas: pixelCanvas([]), makeCanvas: () => pixelCanvas([]), pixels: true, fonts: null });
+  assert.equal(early.setFont("Gamma"), true, "before it has a size it only remembers the font");
+  early.resize(4, 2, 16, 12, 1);
+  assert.equal(early.font, "Gamma");
+});

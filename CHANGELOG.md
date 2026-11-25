@@ -7,6 +7,16 @@ equal `package.json`'s `version` and `fried.js`'s `VERSION` export
 (`tests/version.test.js` checks it). Why each change was made is in
 `evolution/EVOLUTION.md`.
 
+## [0.14.0] - 2026-11-25
+
+### Added
+- `addons/fried-grid.js`: `createGridRenderer` returns `setFont(font,
+  weight?)` and a `font` getter. The font was fixed when the renderer was
+  made, so a consumer offering fonts in its settings had to throw the
+  renderer away and make another (losing its canvases' state). `setFont`
+  draws every glyph afresh in the new font and redraws the whole grid, in
+  both ways of drawing (`evolution/EVOLUTION.md` entry 32).
+
 ## [0.13.0] - 2026-11-25
 
 ### Added
